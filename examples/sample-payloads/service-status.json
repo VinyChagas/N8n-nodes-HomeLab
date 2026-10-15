@@ -1,0 +1,4 @@
+{
+  "heartbeat": { "status": 0, "msg": "Down", "time": "2026-01-01T12:00:00Z" },
+  "monitor": { "name": "example-service", "url": "https://example.invalid/health" }
+}

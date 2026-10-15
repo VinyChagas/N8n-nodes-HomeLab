@@ -1,0 +1,9 @@
+{
+  "source": "example-monitor",
+  "event": "service_status_changed",
+  "severity": "warning",
+  "message": "Exemplo fictício — serviço X degradado",
+  "service": "example-service",
+  "status": "degraded",
+  "timestamp": "2026-01-01T12:00:00Z"
+}

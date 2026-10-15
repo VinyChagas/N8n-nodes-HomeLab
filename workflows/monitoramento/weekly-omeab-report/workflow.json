@@ -1,0 +1,556 @@
+{
+  "name": "07 - WEEKLY OMEAB REPORT",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "15 8 * * 1"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ],
+      "name": "Weekly Schedule"
+    },
+    {
+      "parameters": {
+        "url": "{{$env.SERVICE_BASE_URL}}/v1/system",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.OMEAB_HEALTH_TOKEN }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        220,
+        0
+      ],
+      "name": "Get System",
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "{{$env.SERVICE_BASE_URL}}/v1/storage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.OMEAB_HEALTH_TOKEN }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        440,
+        0
+      ],
+      "name": "Get Storage",
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "{{$env.SERVICE_BASE_URL}}/v1/disk-capacity",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.OMEAB_HEALTH_TOKEN }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        660,
+        0
+      ],
+      "name": "Get Disk Capacity",
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "{{$env.SERVICE_BASE_URL}}/v1/docker",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.OMEAB_HEALTH_TOKEN }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        880,
+        0
+      ],
+      "name": "Get Docker",
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "{{$env.SERVICE_BASE_URL}}/v1/backups",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.OMEAB_HEALTH_TOKEN }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1100,
+        0
+      ],
+      "name": "Get Backups",
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  e.event,\n  e.severity,\n  e.status,\n  e.source,\n  e.component,\n  e.message,\n  e.requires_attention,\n  e.created_at,\n  e.timestamp,\n  e.details\nFROM (SELECT 1) AS dummy\nLEFT JOIN LATERAL (\n  SELECT\n    event,\n    severity,\n    status,\n    source,\n    component,\n    message,\n    requires_attention,\n    created_at,\n    timestamp,\n    details\n  FROM hestia_events\n  WHERE created_at >= NOW() - INTERVAL '7 days'\n  ORDER BY created_at DESC\n  LIMIT 1000\n) e ON TRUE;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1320,
+        0
+      ],
+      "name": "Get Current Week Events",
+      "credentials": {
+        "postgres": {
+          "id": "{{CREDENTIAL_ID}}",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  e.event,\n  e.severity,\n  e.status,\n  e.source,\n  e.component,\n  e.message,\n  e.requires_attention,\n  e.created_at,\n  e.timestamp,\n  e.details\nFROM (SELECT 1) AS dummy\nLEFT JOIN LATERAL (\n  SELECT\n    event,\n    severity,\n    status,\n    source,\n    component,\n    message,\n    requires_attention,\n    created_at,\n    timestamp,\n    details\n  FROM hestia_events\n  WHERE created_at >= NOW() - INTERVAL '14 days'\n    AND created_at < NOW() - INTERVAL '7 days'\n  ORDER BY created_at DESC\n  LIMIT 1000\n) e ON TRUE;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1540,
+        0
+      ],
+      "name": "Get Previous Week Events",
+      "credentials": {
+        "postgres": {
+          "id": "{{CREDENTIAL_ID}}",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "continueOnFail": true,
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  h.id,\n  h.timestamp,\n  h.mount,\n  h.total_bytes,\n  h.used_bytes,\n  h.free_bytes,\n  h.used_percent,\n  h.created_at\nFROM (SELECT 1) AS dummy\nLEFT JOIN LATERAL (\n  SELECT\n    id,\n    timestamp,\n    mount,\n    total_bytes,\n    used_bytes,\n    free_bytes,\n    used_percent,\n    created_at\n  FROM omeab_capacity_history\n  WHERE timestamp >= NOW() - INTERVAL '30 days'\n  ORDER BY timestamp ASC\n) h ON TRUE;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1760,
+        0
+      ],
+      "name": "Get Capacity History",
+      "credentials": {
+        "postgres": {
+          "id": "{{CREDENTIAL_ID}}",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "continueOnFail": true,
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsCode": "function safeNode(name) {\n  try {\n    const item = $(name).first();\n    if (!item) return { status: 'unavailable', reason: 'empty', data: null };\n    const j = item.json ?? {};\n    if (j.error || j.message === 'Error' || (typeof j.statusCode === 'number' && j.statusCode >= 400)) {\n      return { status: 'unavailable', reason: j.error?.message || j.message || 'http_error', data: null };\n    }\n    const body = j.data && typeof j.data === 'object' && !Array.isArray(j.data) && (j.statusCode || j.headers)\n      ? j.data\n      : j;\n    if (body && body.error && !body.hostname && !body.filesystems && !body.containers && !body.healthy && body.device_present === undefined) {\n      return { status: 'unavailable', reason: String(body.error), data: null };\n    }\n    return { status: 'available', reason: null, data: body };\n  } catch (e) {\n    return { status: 'unavailable', reason: String(e.message || e), data: null };\n  }\n}\n\nfunction round1(n) {\n  const x = Number(n);\n  return Number.isFinite(x) ? Math.round(x * 10) / 10 : null;\n}\n\nfunction parseDetails(d) {\n  if (d == null) return {};\n  if (typeof d === 'object') return d;\n  try { return JSON.parse(d); } catch (e) { return {}; }\n}\n\nfunction readEvents(nodeName) {\n  try {\n    let rows = $(nodeName).all().map((i) => i.json).filter(Boolean);\n    if (\n      rows.length === 1 &&\n      rows[0].event == null &&\n      rows[0].severity == null &&\n      rows[0].id == null &&\n      rows[0].mount == null\n    ) {\n      rows = [];\n    }\n    return { available: true, rows };\n  } catch (e) {\n    return { available: false, rows: [], reason: String(e.message || e) };\n  }\n}\n\nfunction isAttention(v) {\n  return v === true || v === 't' || v === 'true';\n}\n\nfunction sevKey(s) {\n  const k = String(s || 'info').toLowerCase();\n  return ['info', 'warning', 'error', 'critical'].includes(k) ? k : 'info';\n}\n\n/**\n * Reconhece eventos de homologação/teste de forma estreita.\n * NÃO filtra monitores reais como \"CRITICAL\".\n */\nfunction isTestEvent(e) {\n  const source = String(e?.source || '').toLowerCase();\n  const event = String(e?.event || '').toLowerCase();\n  const message = String(e?.message || '');\n  const details = parseDetails(e?.details);\n  const monitor = String(details.monitor_name || details.monitorName || '').trim();\n  const container = String(details.container_name || '').trim();\n\n  if (source === 'manual_test' || source === 'production_test') return true;\n  if (/_test$/.test(event)) return true;\n  if (monitor.toUpperCase().startsWith('TESTE')) return true;\n  if (/^teste(\\b|\\s|-)/i.test(monitor)) return true;\n  if (/-test$/i.test(container)) return true;\n  if (container.toLowerCase() === 'docker-guardian-test') return true;\n  if (/^teste\\s+controlado/i.test(message.trim())) return true;\n  if (/^teste\\s*-/i.test(message.trim())) return true;\n  if (/nenhum(a)?\\s+(falha|backup)\\s+real/i.test(message)) return true;\n  if (details.test === true || details.is_test === true || details.homologation === true) return true;\n\n  // Recuperações explicitamente ligadas a incidente/evento de teste\n  if (/_recovered$/.test(event) && /(_test\\b|teste\\s+controlado)/i.test(message)) return true;\n  if (/(estado|incidente)\\s+anterior\\s+era:\\s*\\S*_test/i.test(message)) return true;\n\n  return false;\n}\n\nfunction splitOperational(rows) {\n  const operational = [];\n  const ignored = [];\n  for (const e of rows || []) {\n    if (isTestEvent(e)) ignored.push(e);\n    else operational.push(e);\n  }\n  return { operational, ignored };\n}\n\nfunction isRecoveryEvent(e) {\n  const event = String(e?.event || '');\n  const status = String(e?.status || '').toLowerCase();\n  if (/_recovered$/.test(event)) return true;\n  if (['storage_healthy', 'docker_healthy', 'backup_healthy', 'capacity_normal', 'disk_capacity_recovered'].includes(event)) {\n    return true;\n  }\n  if (status === 'healthy' || status === 'resolved') return true;\n  return false;\n}\n\nfunction isOpenIncidentEvent(e) {\n  if (!e || isRecoveryEvent(e)) return false;\n  const event = String(e.event || '');\n  const sev = sevKey(e.severity);\n  const status = String(e.status || '').toLowerCase();\n\n  const incidentEvents = new Set([\n    'service_down',\n    'container_stopped',\n    'container_unhealthy',\n    'container_restarting',\n    'container_dead',\n    'restart_count_increased',\n    'filesystem_read_only',\n    'storage_device_missing',\n    'storage_unmounted',\n    'disk_space_warning',\n    'disk_space_error',\n    'disk_space_critical',\n    'disk_capacity_warning',\n    'disk_capacity_error',\n    'disk_capacity_critical',\n    'backup_failed',\n    'backup_overdue',\n    'database_dump_failed',\n    'backup_storage_low',\n  ]);\n\n  if (incidentEvents.has(event)) return true;\n  if ((sev === 'critical' || sev === 'error') && status === 'active') return true;\n  if (sev === 'warning' && status === 'active' && (event.startsWith('service_') || event.startsWith('storage_') || event.startsWith('disk_') || event.startsWith('backup_') || event.startsWith('container_'))) {\n    return true;\n  }\n  return false;\n}\n\nfunction entityKey(e) {\n  const details = parseDetails(e?.details);\n  const source = String(e?.source || '');\n  const event = String(e?.event || '');\n  const component = String(e?.component || '');\n\n  if (source === 'uptime_kuma' || component === 'service_monitoring' || event.startsWith('service_')) {\n    const id = details.monitor_id != null && String(details.monitor_id) !== ''\n      ? String(details.monitor_id)\n      : String(details.monitor_name || details.monitorName || 'unknown');\n    return `service:${id}`;\n  }\n  if (source === 'docker_guardian' || component === 'docker' || event.startsWith('container_') || event === 'restart_count_increased') {\n    return `docker:${details.container_name || 'unknown'}`;\n  }\n  if (source === 'storage_guardian' || component === 'storage' || event.startsWith('storage_') || event.startsWith('filesystem_')) {\n    return 'storage:primary';\n  }\n  if (source === 'backup_verification' || component === 'backup' || event.startsWith('backup_') || event.includes('database_dump')) {\n    return 'backup:primary';\n  }\n  if (source === 'disk_capacity' || event.startsWith('disk_') || event.startsWith('capacity_')) {\n    return `disk:${details.mount || 'unknown'}`;\n  }\n  return `${source || 'unknown'}:${component || 'unknown'}`;\n}\n\nfunction eventTime(e) {\n  const t = new Date(e.timestamp || e.created_at).getTime();\n  return Number.isFinite(t) ? t : 0;\n}\n\n/** Estado mais recente por entidade → só conta como unresolved se o último evento ainda for incidente. */\nfunction findUnresolvedIncidents(rows) {\n  const latest = {};\n  for (const e of rows || []) {\n    const key = entityKey(e);\n    const ts = eventTime(e);\n    if (!latest[key] || ts >= latest[key].ts) {\n      latest[key] = { ts, event: e };\n    }\n  }\n\n  const unresolved = [];\n  for (const [key, item] of Object.entries(latest)) {\n    const e = item.event;\n    if (isRecoveryEvent(e)) continue;\n    if (!isOpenIncidentEvent(e)) continue;\n    const details = parseDetails(e.details);\n    unresolved.push({\n      entity: key,\n      source: e.source ?? null,\n      component: e.component ?? null,\n      event: e.event ?? null,\n      severity: e.severity ?? null,\n      status: e.status ?? null,\n      message: e.message ?? null,\n      monitor_name: details.monitor_name || details.monitorName || null,\n      container_name: details.container_name || null,\n      mount: details.mount || null,\n      created_at: e.created_at ?? e.timestamp ?? null,\n    });\n  }\n\n  const rank = { critical: 1, error: 2, warning: 3, info: 4 };\n  unresolved.sort((a, b) => {\n    const ra = rank[sevKey(a.severity)] ?? 9;\n    const rb = rank[sevKey(b.severity)] ?? 9;\n    if (ra !== rb) return ra - rb;\n    return String(b.created_at || '').localeCompare(String(a.created_at || ''));\n  });\n  return unresolved;\n}\n\nfunction aggregateEvents(rows) {\n  const sev = { info: 0, warning: 0, error: 0, critical: 0 };\n  let requires_attention = 0;\n  let recoveries = 0;\n  const by_source = {};\n  const by_component = {};\n  const by_event = {};\n\n  for (const e of rows) {\n    const s = sevKey(e.severity);\n    sev[s] += 1;\n    if (isAttention(e.requires_attention)) requires_attention += 1;\n    const ev = String(e.event || 'unknown');\n    if (/_recovered$/.test(ev)) recoveries += 1;\n    const src = String(e.source || 'unknown');\n    const comp = String(e.component || 'unknown');\n    by_source[src] = (by_source[src] || 0) + 1;\n    by_component[comp] = (by_component[comp] || 0) + 1;\n    by_event[ev] = (by_event[ev] || 0) + 1;\n  }\n\n  const rank = { critical: 1, error: 2, warning: 3, info: 4 };\n  const incidentRows = rows.filter((e) => ['critical', 'error', 'warning'].includes(sevKey(e.severity)));\n  const top_incidents = [...incidentRows]\n    .sort((a, b) => {\n      const ra = rank[sevKey(a.severity)] ?? 9;\n      const rb = rank[sevKey(b.severity)] ?? 9;\n      if (ra !== rb) return ra - rb;\n      return String(b.created_at || b.timestamp || '').localeCompare(String(a.created_at || a.timestamp || ''));\n    })\n    .slice(0, 10)\n    .map((e) => ({\n      source: e.source ?? null,\n      component: e.component ?? null,\n      event: e.event ?? null,\n      severity: e.severity ?? null,\n      status: e.status ?? null,\n      message: e.message ?? null,\n      requires_attention: isAttention(e.requires_attention),\n      created_at: e.created_at ?? e.timestamp ?? null,\n    }));\n\n  const top_recoveries = rows\n    .filter((e) => /_recovered$/.test(String(e.event || '')))\n    .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))\n    .slice(0, 10)\n    .map((e) => ({\n      source: e.source ?? null,\n      event: e.event ?? null,\n      message: e.message ?? null,\n      created_at: e.created_at ?? e.timestamp ?? null,\n    }));\n\n  return {\n    status: 'available',\n    total: rows.length,\n    info: sev.info,\n    warning: sev.warning,\n    error: sev.error,\n    critical: sev.critical,\n    requires_attention,\n    recoveries,\n    by_source,\n    by_component,\n    by_event,\n    top_incidents,\n    top_recoveries,\n  };\n}\n\nfunction classifyDelta(current, previous) {\n  if (previous === null || previous === undefined) {\n    return { current_week: current, previous_week: null, classification: 'insufficient_data' };\n  }\n  let classification = 'stable';\n  if (current < previous) classification = 'improving';\n  else if (current > previous) classification = 'worsening';\n  return { current_week: current, previous_week: previous, classification };\n}\n\nfunction serviceAnalysis(rows) {\n  const serviceEvents = rows.filter((e) => e.source === 'uptime_kuma' || e.component === 'service_monitoring');\n  const downs = serviceEvents.filter((e) => e.event === 'service_down');\n  const recovered = serviceEvents.filter((e) => e.event === 'service_recovered');\n\n  const byService = {};\n  for (const e of downs) {\n    const d = parseDetails(e.details);\n    const key = d.monitor_name || d.monitorName || d.name || d.monitor_id || 'unknown';\n    if (!byService[key]) byService[key] = { service: key, service_down: 0, service_recovered: 0, known_downtime_seconds: null };\n    byService[key].service_down += 1;\n  }\n  for (const e of recovered) {\n    const d = parseDetails(e.details);\n    const key = d.monitor_name || d.monitorName || d.name || d.monitor_id || 'unknown';\n    if (!byService[key]) byService[key] = { service: key, service_down: 0, service_recovered: 0, known_downtime_seconds: null };\n    byService[key].service_recovered += 1;\n  }\n\n  const byMonitor = {};\n  for (const e of serviceEvents) {\n    const d = parseDetails(e.details);\n    const mid = String(d.monitor_id ?? d.monitor_name ?? d.name ?? 'unknown');\n    if (!byMonitor[mid]) byMonitor[mid] = [];\n    byMonitor[mid].push({\n      event: e.event,\n      ts: eventTime(e),\n      name: d.monitor_name || d.monitorName || d.name || mid,\n    });\n  }\n  let knownDowntimeTotal = 0;\n  let pairs = 0;\n  for (const mid of Object.keys(byMonitor)) {\n    const seq = byMonitor[mid].filter((x) => Number.isFinite(x.ts)).sort((a, b) => a.ts - b.ts);\n    let openDown = null;\n    let serviceDowntime = 0;\n    for (const item of seq) {\n      if (item.event === 'service_down') {\n        if (openDown == null) openDown = item.ts;\n      } else if (item.event === 'service_recovered' && openDown != null) {\n        const dur = Math.max(0, Math.floor((item.ts - openDown) / 1000));\n        serviceDowntime += dur;\n        knownDowntimeTotal += dur;\n        pairs += 1;\n        openDown = null;\n      }\n    }\n    const name = seq[0]?.name || mid;\n    if (byService[name]) byService[name].known_downtime_seconds = serviceDowntime || null;\n  }\n\n  const most_unstable = Object.values(byService)\n    .sort((a, b) => b.service_down - a.service_down || b.service_recovered - a.service_recovered)\n    .slice(0, 5);\n\n  return {\n    status: 'available',\n    source: 'hestia_events',\n    service_down: downs.length,\n    service_recovered: recovered.length,\n    most_unstable,\n    most_affected_service: most_unstable[0]?.service || null,\n    known_downtime_seconds_total: pairs > 0 ? knownDowntimeTotal : null,\n    known_downtime_pairs: pairs,\n    uptime_percent: null,\n    note: pairs > 0\n      ? 'Duração estimada apenas entre pares DOWN→RECOVERED observados; uptime percentual não calculado.'\n      : 'Sem pares DOWN→RECOVERED suficientes para estimar duração; uptime percentual não inventado.',\n  };\n}\n\nfunction dockerEventsAnalysis(rows) {\n  const dockerRows = rows.filter((e) => e.source === 'docker_guardian' || e.component === 'docker');\n  const types = [\n    'container_stopped',\n    'container_unhealthy',\n    'container_restarting',\n    'container_dead',\n    'container_recovered',\n    'restart_count_increased',\n  ];\n  const counts = {};\n  for (const t of types) counts[t] = dockerRows.filter((e) => e.event === t).length;\n\n  const byContainer = {};\n  for (const e of dockerRows) {\n    const d = parseDetails(e.details);\n    const name = d.container_name || d.name || 'unknown';\n    if (!byContainer[name]) byContainer[name] = { container: name, incidents: 0, recoveries: 0, events: {} };\n    byContainer[name].events[e.event] = (byContainer[name].events[e.event] || 0) + 1;\n    if (e.event === 'container_recovered') byContainer[name].recoveries += 1;\n    else if (types.includes(e.event) && e.event !== 'container_recovered') byContainer[name].incidents += 1;\n  }\n\n  const most_problematic = Object.values(byContainer)\n    .sort((a, b) => b.incidents - a.incidents || b.recoveries - a.recoveries)\n    .slice(0, 5);\n\n  return {\n    week: {\n      ...counts,\n      total_incidents: types.filter((t) => t !== 'container_recovered').reduce((a, t) => a + counts[t], 0),\n      recoveries: counts.container_recovered,\n      most_problematic,\n    },\n  };\n}\n\nfunction storageEventsAnalysis(rows) {\n  const storageRows = rows.filter((e) =>\n    e.source === 'storage_guardian' ||\n    e.component === 'storage' ||\n    String(e.event || '').startsWith('storage_') ||\n    String(e.event || '').startsWith('filesystem_') ||\n    String(e.event || '').includes('disk_space')\n  );\n  const keys = {\n    mount_issues: storageRows.filter((e) => /mount|device_missing|storage_device/i.test(String(e.event))).length,\n    readonly: storageRows.filter((e) => /read_only|readonly|filesystem_read_only/i.test(String(e.event))).length,\n    io_or_kernel: storageRows.filter((e) => /io_error|kernel|buffer|usb/i.test(String(e.event) + ' ' + String(e.message || ''))).length,\n    disappear: storageRows.filter((e) => /missing|disappear|not_found|unmounted/i.test(String(e.event))).length,\n    recovery: storageRows.filter((e) => e.event === 'storage_recovered').length,\n    total: storageRows.length,\n  };\n  return { week: keys, events_sample: storageRows.slice(0, 5).map((e) => ({ event: e.event, severity: e.severity, created_at: e.created_at })) };\n}\n\nfunction backupEventsAnalysis(rows) {\n  const backupRows = rows.filter((e) => e.source === 'backup_verification' || e.component === 'backup' || String(e.event || '').startsWith('backup_') || String(e.event || '').includes('database_dump'));\n  const success = backupRows.filter((e) => /success|healthy|recovered/i.test(String(e.event))).length;\n  const failed = backupRows.filter((e) => /fail/i.test(String(e.event))).length;\n  const overdue = backupRows.filter((e) => /overdue/i.test(String(e.event))).length;\n  const dump_failed = backupRows.filter((e) => /database_dump_failed/i.test(String(e.event))).length;\n  const storage_low = backupRows.filter((e) => /backup_storage_low/i.test(String(e.event))).length;\n  return {\n    week: {\n      backup_success_or_recovered: success,\n      backup_failed: failed,\n      backup_overdue: overdue,\n      database_dump_failed: dump_failed,\n      backup_storage_low: storage_low,\n      total_events: backupRows.length,\n    },\n  };\n}\n\nfunction capacityGrowth(historyRows, currentFilesystems) {\n  const byMount = {};\n  for (const r of historyRows) {\n    const m = r.mount;\n    if (!m) continue;\n    if (!byMount[m]) byMount[m] = [];\n    byMount[m].push({\n      timestamp: r.timestamp || r.created_at,\n      used_bytes: r.used_bytes != null ? Number(r.used_bytes) : null,\n      used_percent: r.used_percent != null ? Number(r.used_percent) : null,\n      total_bytes: r.total_bytes != null ? Number(r.total_bytes) : null,\n      free_bytes: r.free_bytes != null ? Number(r.free_bytes) : null,\n    });\n  }\n\n  const mounts = {};\n  const mountList = (currentFilesystems || []).map((f) => f.mount).concat(Object.keys(byMount));\n  const uniqueMounts = [...new Set(mountList.filter(Boolean))];\n\n  for (const mount of uniqueMounts) {\n    const series = (byMount[mount] || []).filter((p) => p.used_bytes != null && p.timestamp)\n      .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));\n    if (series.length < 2) {\n      mounts[mount] = {\n        available: false,\n        reason: 'history_building',\n        samples: series.length,\n        message: 'Histórico de crescimento ainda em construção.',\n      };\n      continue;\n    }\n    const first = series[0];\n    const last = series[series.length - 1];\n    const ms = new Date(last.timestamp) - new Date(first.timestamp);\n    const days = ms / (1000 * 60 * 60 * 24);\n    if (!(days >= 1)) {\n      mounts[mount] = {\n        available: false,\n        reason: 'insufficient_span',\n        samples: series.length,\n        message: 'Histórico insuficiente (intervalo < 1 dia).',\n      };\n      continue;\n    }\n    const delta = last.used_bytes - first.used_bytes;\n    mounts[mount] = {\n      available: true,\n      samples: series.length,\n      from: first.timestamp,\n      to: last.timestamp,\n      days: Math.round(days * 10) / 10,\n      delta_used_bytes: delta,\n      bytes_per_day: Math.round(delta / days),\n      used_percent_from: first.used_percent,\n      used_percent_to: last.used_percent,\n    };\n  }\n\n  return {\n    status: 'available',\n    available: Object.values(mounts).some((m) => m.available === true),\n    mounts,\n    note: Object.values(mounts).some((m) => m.available === true)\n      ? null\n      : 'Histórico de crescimento ainda em construção. Backlog: integrar 05 Disk Capacity para snapshot periódico (ex.: 1x/dia).',\n  };\n}\n\nconst now = new Date();\nconst toIso = now.toISOString();\nconst fromCurrent = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();\nconst fromPrevious = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000).toISOString();\nconst toPrevious = fromCurrent;\n\nconst systemSrc = safeNode('Get System');\nconst storageSrc = safeNode('Get Storage');\nconst diskSrc = safeNode('Get Disk Capacity');\nconst dockerSrc = safeNode('Get Docker');\nconst backupSrc = safeNode('Get Backups');\n\nconst currentEv = readEvents('Get Current Week Events');\nconst previousEv = readEvents('Get Previous Week Events');\nconst histEv = readEvents('Get Capacity History');\n\nconst currentRaw = currentEv.available ? currentEv.rows : [];\nconst previousRaw = previousEv.available ? previousEv.rows : [];\nconst currentSplit = splitOperational(currentRaw);\nconst previousSplit = splitOperational(previousRaw);\nconst currentOps = currentSplit.operational;\nconst previousOps = previousSplit.operational;\n\nconst currentAgg = currentEv.available\n  ? aggregateEvents(currentOps)\n  : { status: 'unavailable', reason: currentEv.reason || 'query_failed', total: 0, info: 0, warning: 0, error: 0, critical: 0, requires_attention: 0, recoveries: 0, by_source: {}, by_component: {}, by_event: {}, top_incidents: [], top_recoveries: [] };\nconst previousAgg = previousEv.available\n  ? aggregateEvents(previousOps)\n  : { status: 'unavailable', reason: previousEv.reason || 'query_failed', total: 0, info: 0, warning: 0, error: 0, critical: 0, requires_attention: 0, recoveries: 0, by_source: {}, by_component: {}, by_event: {}, top_incidents: [], top_recoveries: [] };\n\nconst unresolved = currentEv.available ? findUnresolvedIncidents(currentOps) : [];\nconst unresolvedCritical = unresolved.filter((u) => sevKey(u.severity) === 'critical');\nconst unresolvedError = unresolved.filter((u) => sevKey(u.severity) === 'error');\nconst unresolvedWarning = unresolved.filter((u) => sevKey(u.severity) === 'warning');\n\nconst test_events_ignored = {\n  current_week: currentSplit.ignored.length,\n  previous_week: previousSplit.ignored.length,\n  total: currentSplit.ignored.length + previousSplit.ignored.length,\n  samples: currentSplit.ignored.slice(0, 8).map((e) => ({\n    source: e.source ?? null,\n    event: e.event ?? null,\n    monitor_name: parseDetails(e.details).monitor_name || null,\n    container_name: parseDetails(e.details).container_name || null,\n    message: e.message ?? null,\n  })),\n};\n\nconst system = systemSrc.status === 'available'\n  ? {\n      status: 'available',\n      hostname: systemSrc.data.hostname ?? null,\n      uptime_seconds: systemSrc.data.uptime_seconds ?? null,\n      uptime_human: systemSrc.data.uptime_human ?? null,\n      cpu_percent_current: systemSrc.data.cpu?.usage_percent ?? null,\n      load_1m: round1(systemSrc.data.cpu?.load_1m),\n      load_5m: round1(systemSrc.data.cpu?.load_5m),\n      load_15m: round1(systemSrc.data.cpu?.load_15m),\n      ram_percent_current: systemSrc.data.memory?.used_percent ?? null,\n      ram_used_bytes: systemSrc.data.memory?.used_bytes ?? null,\n      ram_total_bytes: systemSrc.data.memory?.total_bytes ?? null,\n      note: 'Valores pontuais atuais — não são médias semanais.',\n    }\n  : { status: 'unavailable', reason: systemSrc.reason };\n\nconst storageWeek = storageEventsAnalysis(currentOps);\nconst storage = storageSrc.status === 'available'\n  ? {\n      status: 'available',\n      healthy: storageSrc.data.healthy === true,\n      device_present: storageSrc.data.device_present === true,\n      mounted: storageSrc.data.mounted === true,\n      mode: storageSrc.data.mode ?? null,\n      filesystem: storageSrc.data.filesystem ?? null,\n      device: storageSrc.data.device ?? null,\n      mountpoint: storageSrc.data.mountpoint ?? null,\n      identity_match: storageSrc.data.identity_match === true,\n      used_percent: storageSrc.data.used_percent ?? null,\n      kernel_errors: storageSrc.data.kernel_errors ?? null,\n      emergency_ro: storageSrc.data.emergency_ro === true,\n      week: storageWeek.week,\n    }\n  : { status: 'unavailable', reason: storageSrc.reason, week: storageWeek.week };\n\nconst disk_capacity = diskSrc.status === 'available'\n  ? {\n      status: 'available',\n      thresholds: diskSrc.data.thresholds ?? null,\n      worst_capacity_state: diskSrc.data.summary?.worst_capacity_state ?? null,\n      filesystems: (diskSrc.data.filesystems || []).map((fs) => ({\n        mount: fs.mount,\n        device: fs.device ?? null,\n        used_percent: fs.used_percent,\n        free_gb: fs.free_gb,\n        total_gb: fs.total_gb,\n        total_bytes: fs.total_bytes ?? null,\n        used_bytes: fs.used_bytes ?? null,\n        free_bytes: fs.free_bytes ?? null,\n        capacity_state: fs.capacity_state,\n        available: fs.available !== false,\n      })),\n    }\n  : { status: 'unavailable', reason: diskSrc.reason };\n\nconst dockerLive = dockerSrc.status === 'available'\n  ? {\n      status: 'available',\n      healthy: dockerSrc.data.healthy === true,\n      summary: dockerSrc.data.summary ?? null,\n      critical_problems: (dockerSrc.data.containers || [])\n        .filter((c) => c.expected === true && c.ok !== true && String(c.criticality).toLowerCase() === 'critical')\n        .map((c) => ({ name: c.name, state: c.state, health: c.health })),\n      problem_containers: (dockerSrc.data.containers || [])\n        .filter((c) => c.expected === true && c.ok !== true)\n        .map((c) => ({ name: c.name, state: c.state, health: c.health, criticality: c.criticality })),\n    }\n  : { status: 'unavailable', reason: dockerSrc.reason };\n\nconst dockerWeek = dockerEventsAnalysis(currentOps);\nconst docker = { ...dockerLive, ...dockerWeek };\n\nconst backupWeek = backupEventsAnalysis(currentOps);\nconst backups = backupSrc.status === 'available'\n  ? {\n      status: 'available',\n      healthy: backupSrc.data.healthy === true,\n      checked_at: backupSrc.data.checked_at ?? null,\n      postgres: backupSrc.data.postgres ?? null,\n      restic: backupSrc.data.restic ?? null,\n      offsite: backupSrc.data.offsite ?? null,\n      issues: backupSrc.data.issues ?? [],\n      week: backupWeek.week,\n    }\n  : { status: 'unavailable', reason: backupSrc.reason, week: backupWeek.week };\n\nconst services = currentEv.available\n  ? serviceAnalysis(currentOps)\n  : { status: 'unavailable', reason: 'events_unavailable', service_down: 0, service_recovered: 0, most_unstable: [], most_affected_service: null, known_downtime_seconds_total: null, uptime_percent: null };\n\nconst historyRows = histEv.available ? histEv.rows.filter((r) => r.mount != null) : [];\nconst capacity_history = histEv.available\n  ? capacityGrowth(historyRows, disk_capacity.status === 'available' ? disk_capacity.filesystems : [])\n  : { status: 'unavailable', reason: histEv.reason || 'query_failed', available: false, mounts: {}, note: 'Não foi possível ler omeab_capacity_history.' };\n\n// Trends: apenas eventos operacionais; semana anterior vazia => insufficient_data\nconst prevOk = previousEv.available && previousAgg.status === 'available' && previousAgg.total > 0;\nconst prevTotalIncidents = prevOk ? (previousAgg.warning + previousAgg.error + previousAgg.critical) : null;\nconst currTotalIncidents = currentAgg.warning + currentAgg.error + currentAgg.critical;\n\nconst prevDockerInc = prevOk\n  ? (previousAgg.by_event.container_stopped || 0) + (previousAgg.by_event.container_unhealthy || 0) + (previousAgg.by_event.container_restarting || 0) + (previousAgg.by_event.container_dead || 0) + (previousAgg.by_event.restart_count_increased || 0)\n  : null;\nconst currDockerInc = (currentAgg.by_event.container_stopped || 0) + (currentAgg.by_event.container_unhealthy || 0) + (currentAgg.by_event.container_restarting || 0) + (currentAgg.by_event.container_dead || 0) + (currentAgg.by_event.restart_count_increased || 0);\n\nconst prevServiceDown = prevOk ? (previousAgg.by_event.service_down || 0) : null;\nconst currServiceDown = currentAgg.by_event.service_down || 0;\n\nconst prevBackupFail = prevOk\n  ? Object.entries(previousAgg.by_event).filter(([k]) => /fail|overdue|dump_failed|storage_low/i.test(k)).reduce((a, [, v]) => a + v, 0)\n  : null;\nconst currBackupFail = Object.entries(currentAgg.by_event).filter(([k]) => /fail|overdue|dump_failed|storage_low/i.test(k)).reduce((a, [, v]) => a + v, 0);\n\nconst trends = {\n  storage_growth: {\n    available: capacity_history.available === true,\n    classification: capacity_history.available === true ? 'stable' : 'insufficient_data',\n    detail: capacity_history.note || null,\n  },\n  incident_trend: classifyDelta(currTotalIncidents, prevOk ? prevTotalIncidents : null),\n  critical_trend: classifyDelta(currentAgg.critical, prevOk ? previousAgg.critical : null),\n  error_trend: classifyDelta(currentAgg.error, prevOk ? previousAgg.error : null),\n  warning_trend: classifyDelta(currentAgg.warning, prevOk ? previousAgg.warning : null),\n  container_incident_trend: classifyDelta(currDockerInc, prevDockerInc),\n  service_downtime_trend: classifyDelta(currServiceDown, prevServiceDown),\n  backup_trend: classifyDelta(currBackupFail, prevBackupFail),\n};\n\nconst trendClasses = Object.values(trends).map((t) => t.classification);\nlet overall_trend = 'insufficient_data';\nif (trendClasses.every((c) => c === 'insufficient_data')) {\n  overall_trend = 'insufficient_data';\n} else {\n  const known = trendClasses.filter((c) => c !== 'insufficient_data');\n  if (known.includes('worsening')) overall_trend = 'worsening';\n  else if (known.includes('improving') && known.every((c) => c === 'improving' || c === 'stable')) overall_trend = 'improving';\n  else overall_trend = 'stable';\n}\ntrends.overall = { classification: overall_trend };\n\n// overall_status: estado atual + unresolved reais + tendência\nlet overall = 'healthy';\nconst reasons = [];\n\nif (storage.status === 'available') {\n  if (!storage.device_present || !storage.mounted || storage.mode === 'ro' || storage.emergency_ro || storage.healthy !== true) {\n    overall = 'critical';\n    reasons.push('storage_unhealthy_current');\n  }\n}\nif (disk_capacity.status === 'available' && disk_capacity.worst_capacity_state === 'critical') {\n  overall = 'critical';\n  reasons.push('disk_capacity_critical_current');\n}\nif (docker.status === 'available' && (docker.critical_problems || []).length > 0) {\n  overall = 'critical';\n  reasons.push('docker_critical_current');\n}\nif (backups.status === 'available' && backups.healthy !== true) {\n  const hasCriticalIssue = (backups.issues || []).some((i) => String(i.severity).toLowerCase() === 'critical');\n  if (hasCriticalIssue) {\n    overall = 'critical';\n    reasons.push('backup_critical_current');\n  }\n}\nif (unresolvedCritical.length > 0) {\n  overall = 'critical';\n  reasons.push('unresolved_critical_open');\n}\n\nif (overall !== 'critical') {\n  if (unresolvedError.length > 0) {\n    overall = 'degraded';\n    reasons.push('unresolved_error_open');\n  }\n  const repetitiveErrors = currentAgg.error >= 3 || currDockerInc >= 3 || currServiceDown >= 3 || currBackupFail >= 1;\n  const liveDegraded =\n    (disk_capacity.status === 'available' && ['warning', 'error'].includes(disk_capacity.worst_capacity_state)) ||\n    (docker.status === 'available' && ((docker.summary?.unhealthy || 0) > 0 || (docker.summary?.restarting || 0) > 0 || (docker.summary?.stopped || 0) > 0 || (docker.problem_containers || []).length > 0)) ||\n    (backups.status === 'available' && backups.healthy !== true);\n\n  if (repetitiveErrors) {\n    overall = 'degraded';\n    reasons.push('repetitive_operational_incidents');\n  }\n  if (liveDegraded) {\n    overall = 'degraded';\n    reasons.push('live_degraded');\n  }\n\n  const unavailableLive = [system, storage, disk_capacity, docker, backups].filter((s) => s.status === 'unavailable').length;\n  if (unavailableLive > 0) {\n    overall = overall === 'healthy' ? 'degraded' : overall;\n    reasons.push('partial_source_unavailable');\n  }\n}\n\nif (overall === 'healthy') {\n  if (unresolvedWarning.length > 0 || currentAgg.warning > 0) {\n    overall = 'attention';\n    reasons.push(unresolvedWarning.length > 0 ? 'unresolved_warning_open' : 'weekly_warnings');\n  } else if (overall_trend === 'worsening') {\n    overall = 'attention';\n    reasons.push('trend_worsening');\n  } else if ((currentAgg.error + currentAgg.critical) > 0 && unresolved.length === 0) {\n    overall = 'attention';\n    reasons.push('resolved_incidents_in_week');\n  }\n} else if (overall === 'degraded' && overall_trend === 'worsening') {\n  reasons.push('trend_worsening');\n}\n\nconst summaryText =\n  overall === 'healthy'\n    ? 'Sistema estável durante a semana.'\n    : overall === 'attention'\n      ? 'Semana operacional com pontos de atenção.'\n      : overall === 'degraded'\n        ? 'Degradação ou erros relevantes observados na semana.'\n        : 'Condição crítica — atenção imediata recomendada.';\n\nconst hestiaInsight =\n  overall === 'healthy' && overall_trend !== 'worsening'\n    ? 'Não identifiquei degradação progressiva esta semana.'\n    : overall_trend === 'worsening'\n      ? 'Há sinais de piora em relação à semana anterior — vale acompanhar de perto.'\n      : overall_trend === 'improving'\n        ? 'Os indicadores da semana melhoraram em relação ao período anterior.'\n        : overall_trend === 'insufficient_data'\n          ? 'Histórico ainda curto para afirmar tendência com segurança.'\n          : overall === 'critical'\n            ? 'Há condição crítica atual ou incidente crítico ainda aberto.'\n            : 'Há pontos que merecem acompanhamento nesta semana.';\n\nconst sources = { available: [], unavailable: [], not_monitored: [] };\nfor (const [k, v] of Object.entries({ system, storage, disk_capacity, docker, backups, services, events_current: currentAgg, events_previous: previousAgg, capacity_history })) {\n  if (v.status === 'available') sources.available.push(k);\n  else if (v.status === 'unavailable') sources.unavailable.push(k);\n}\n\nconst capacity_rows = [];\nif (disk_capacity.status === 'available') {\n  for (const fs of disk_capacity.filesystems || []) {\n    const mount = String(fs.mount || '');\n    if (!/^[\\w./-]+$/.test(mount)) continue;\n    capacity_rows.push({\n      timestamp: toIso,\n      mount,\n      total_bytes: Number.isFinite(Number(fs.total_bytes)) ? Number(fs.total_bytes) : null,\n      used_bytes: Number.isFinite(Number(fs.used_bytes)) ? Number(fs.used_bytes) : null,\n      free_bytes: Number.isFinite(Number(fs.free_bytes)) ? Number(fs.free_bytes) : null,\n      used_percent: Number.isFinite(Number(fs.used_percent)) ? Number(fs.used_percent) : null,\n    });\n  }\n}\n\nconst snapshot = {\n  report_type: 'weekly_omeab',\n  generated_at: toIso,\n  period: { from: fromCurrent, to: toIso },\n  previous_period: { from: fromPrevious, to: toPrevious },\n  overall_status: overall,\n  overall_reasons: reasons,\n  overall_trend,\n  summary: summaryText,\n  hestia_insight: hestiaInsight,\n  health_score: {\n    implemented: false,\n    reason: 'Score artificial omitido nesta versão; preferência por métricas reais e overall_status determinístico.',\n  },\n  system,\n  storage,\n  disk_capacity,\n  docker,\n  backups,\n  services,\n  events: {\n    raw_current_week_total: currentRaw.length,\n    raw_previous_week_total: previousRaw.length,\n    test_events_ignored,\n    current_week: currentAgg,\n    previous_week: previousAgg,\n    unresolved_incidents: unresolved,\n  },\n  trends,\n  capacity_history,\n  sources,\n  backlog: {\n    disk_capacity_periodic_snapshot: 'Integrar futuramente o 05 Disk Capacity para gravar snapshot periódico (ex.: 1x/dia) em omeab_capacity_history.',\n  },\n};\n\nreturn [{ json: { snapshot, capacity_rows } }];\n",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        0
+      ],
+      "name": "Build Weekly Snapshot",
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const snap = $json.snapshot;\nconst icon = { healthy: '🟢', attention: '🟠', degraded: '🟡', critical: '🔴' };\nconst trendIcon = { improving: '📈', stable: '↔️', worsening: '⚠️', insufficient_data: '❔' };\nconst o = snap.overall_status || 'healthy';\n\nfunction fmtDateSP(iso) {\n  try {\n    return new Intl.DateTimeFormat('pt-BR', {\n      timeZone: 'America/Sao_Paulo',\n      day: '2-digit',\n      month: '2-digit',\n    }).format(new Date(iso));\n  } catch (e) {\n    return String(iso || '').slice(0, 10);\n  }\n}\n\nfunction mountLabel(m) {\n  if (m === '/') return 'NVMe /';\n  if (m === '/srv/storage') return 'RAID /srv/storage';\n  return m;\n}\n\nconst sys = snap.system;\nconst storage = snap.storage;\nconst disk = snap.disk_capacity;\nconst docker = snap.docker;\nconst backups = snap.backups;\nconst services = snap.services;\nconst events = snap.events?.current_week || {};\nconst trends = snap.trends || {};\nconst capHist = snap.capacity_history || {};\n\nconst lines = [];\nlines.push('🏠 OMEAB — Relatório semanal');\nlines.push('');\nlines.push('📅 Período');\nlines.push(`${fmtDateSP(snap.period.from)} → ${fmtDateSP(snap.period.to)}`);\nlines.push('');\nlines.push(`${icon[o] || '⚪'} Estado geral`);\nlines.push(snap.summary || o);\nlines.push('');\n\nlines.push('🖥 Servidor');\nif (sys.status === 'available') {\n  lines.push(`Uptime atual: ${sys.uptime_human || '?'}`);\n  lines.push(`CPU atual: ${sys.cpu_percent_current ?? '?'}%`);\n  lines.push(`RAM atual: ${sys.ram_percent_current ?? '?'}%`);\n  if (sys.load_1m != null) lines.push(`Load: ${sys.load_1m} / ${sys.load_5m} / ${sys.load_15m}`);\n} else {\n  lines.push('⚠️ Dados de sistema indisponíveis');\n}\nlines.push('');\n\nlines.push('💾 Storage');\nif (storage.status === 'available') {\n  const ok = storage.healthy && storage.mounted && storage.mode === 'rw';\n  lines.push(`RAID: ${ok ? 'saudável' : 'atenção'}`);\n  if (storage.used_percent != null) lines.push(`Uso atual: ${storage.used_percent}%`);\n  const w = storage.week || {};\n  lines.push(`Incidentes na semana: ${(w.readonly || 0) + (w.mount_issues || 0) + (w.io_or_kernel || 0) + (w.disappear || 0)}`);\n  lines.push(`Recuperações: ${w.recovery || 0}`);\n} else {\n  lines.push('⚠️ dados indisponíveis');\n}\nlines.push('');\n\nlines.push('📈 Crescimento');\nif (capHist.status === 'unavailable') {\n  lines.push('⚠️ histórico indisponível');\n} else {\n  const mounts = capHist.mounts || {};\n  const order = ['/srv/storage', '/'];\n  const seen = new Set();\n  const list = [...order.filter((m) => mounts[m]), ...Object.keys(mounts).filter((m) => !order.includes(m))];\n  if (!list.length) {\n    lines.push('RAID: histórico ainda em construção');\n    lines.push('NVMe: histórico ainda em construção');\n  } else {\n    for (const m of list) {\n      if (seen.has(m)) continue;\n      seen.add(m);\n      const g = mounts[m];\n      if (g.available) {\n        const gbDay = Math.round((g.bytes_per_day / (1024 ** 3)) * 1000) / 1000;\n        lines.push(`${mountLabel(m)}: ${gbDay} GB/dia (${g.days}d)`);\n      } else {\n        lines.push(`${mountLabel(m)}: histórico ainda em construção`);\n      }\n    }\n  }\n}\nlines.push('');\n\nlines.push('🐳 Docker');\nif (docker.status === 'available') {\n  const s = docker.summary || {};\n  lines.push(`${s.total ?? '?'} containers atuais (${s.running ?? '?'} running)`);\n  lines.push(`Incidentes na semana: ${docker.week?.total_incidents ?? 0}`);\n  lines.push(`Recuperações: ${docker.week?.recoveries ?? 0}`);\n  const top = (docker.week?.most_problematic || [])[0];\n  if (top) lines.push(`Mais problemático: ${top.container} (${top.incidents})`);\n} else {\n  lines.push('⚠️ dados indisponíveis');\n}\nlines.push('');\n\nlines.push('🌐 Serviços');\nif (services.status === 'available') {\n  lines.push(`Indisponibilidades: ${services.service_down ?? 0}`);\n  lines.push(`Recuperações: ${services.service_recovered ?? 0}`);\n  const top = (services.most_unstable || [])[0];\n  if (top) lines.push(`Serviço mais afetado: ${top.service} (${top.service_down})`);\n  if (services.known_downtime_seconds_total != null && services.known_downtime_seconds_total > 0) {\n    lines.push(`Tempo conhecido indisponível: ${services.known_downtime_seconds_total}s`);\n  }\n} else {\n  lines.push('⚠️ dados indisponíveis');\n}\nlines.push('');\n\nlines.push('💾 Backups');\nif (backups.status === 'available') {\n  lines.push(`Estado atual: ${backups.healthy ? 'saudável' : 'com pendências'}`);\n  lines.push(`Falhas na semana: ${backups.week?.backup_failed ?? 0}`);\n  const resticAt = backups.restic?.last_backup_at || backups.restic?.last_snapshot_at || 'n/d';\n  lines.push(`Restic: ${backups.restic?.status || 'n/d'} (último: ${resticAt})`);\n  const off = backups.offsite || {};\n  const offConfigured = off.configured === true || off.enabled === true || off.status === 'ok';\n  if (offConfigured) lines.push(`Offsite: ${off.status || 'ok'}`);\n  else lines.push('Offsite: não configurado');\n} else {\n  lines.push('⚠️ dados indisponíveis');\n}\nlines.push('');\n\nlines.push('📋 Eventos');\nif (events.status === 'available') {\n  lines.push(`Critical: ${events.critical}`);\n  lines.push(`Error: ${events.error}`);\n  lines.push(`Warning: ${events.warning}`);\n  lines.push(`Info: ${events.info}`);\n  lines.push(`Recuperações: ${events.recoveries}`);\n} else {\n  lines.push('⚠️ Eventos indisponíveis');\n}\nlines.push('');\n\nconst ot = trends.overall?.classification || 'insufficient_data';\nlines.push('📊 Tendência');\nif (ot === 'insufficient_data') {\n  lines.push(`${trendIcon.insufficient_data} insufficient_data`);\n  lines.push('Histórico da semana anterior insuficiente para comparar.');\n} else if (ot === 'worsening') {\n  lines.push(`${trendIcon.worsening} Mais incidentes que na semana anterior.`);\n} else if (ot === 'improving') {\n  lines.push(`${trendIcon.improving} Menos incidentes que na semana anterior.`);\n} else {\n  lines.push(`${trendIcon.stable} Estável`);\n}\nlines.push('');\n\nlines.push('💡 Hestia');\nlines.push(`\"${snap.hestia_insight || ''}\"`);\nlines.push('');\nlines.push('— Hestia / OMEAB Weekly Report');\n\nconst text = lines.join('\\n');\n\nreturn [{\n  json: {\n    snapshot: snap,\n    capacity_rows: $json.capacity_rows || [],\n    alert: {\n      type: 'HESTIA_WEEKLY_REPORT',\n      priority: o === 'critical' ? 'high' : 'normal',\n      text,\n    },\n  },\n}];\n",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        0
+      ],
+      "name": "Prepare Weekly Message",
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $json.capacity_rows || [];\nconst snap = $json.snapshot;\nconst alert = $json.alert;\n\nif (!rows.length) {\n  return [{\n    json: {\n      snapshot: snap,\n      alert,\n      capacity_persist: { attempted: false, reason: 'no_rows' },\n    },\n  }];\n}\n\nfunction sqlLit(v) {\n  if (v === null || v === undefined) return 'NULL';\n  if (typeof v === 'number' && Number.isFinite(v)) return String(v);\n  return \"'\" + String(v).replace(/'/g, \"''\") + \"'\";\n}\n\nconst values = rows.map((r) => {\n  const mount = String(r.mount || '');\n  if (!/^[\\w./-]+$/.test(mount)) return null;\n  return `(${sqlLit(r.timestamp)}::timestamptz, ${sqlLit(mount)}, ${sqlLit(r.total_bytes)}, ${sqlLit(r.used_bytes)}, ${sqlLit(r.free_bytes)}, ${sqlLit(r.used_percent)})`;\n}).filter(Boolean);\n\nif (!values.length) {\n  return [{\n    json: {\n      snapshot: snap,\n      alert,\n      capacity_persist: { attempted: false, reason: 'no_valid_rows' },\n    },\n  }];\n}\n\nconst query = `INSERT INTO omeab_capacity_history (timestamp, mount, total_bytes, used_bytes, free_bytes, used_percent) VALUES ${values.join(', ')};`;\n\nreturn [{\n  json: {\n    snapshot: snap,\n    alert,\n    capacity_persist: { attempted: true, rows: values.length },\n    capacity_insert_sql: query,\n  },\n}];\n",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        0
+      ],
+      "name": "Prepare Capacity Persist",
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.capacity_insert_sql || 'SELECT 1 WHERE false;' }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2640,
+        0
+      ],
+      "name": "Store Capacity Snapshot",
+      "credentials": {
+        "postgres": {
+          "id": "{{CREDENTIAL_ID}}",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "continueOnFail": true,
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Reattach snapshot/alert after Postgres node (which may replace json)\nlet snap = null;\nlet alert = null;\nlet persist = null;\ntry {\n  const prep = $('Prepare Capacity Persist').first().json;\n  snap = prep.snapshot;\n  alert = prep.alert;\n  persist = prep.capacity_persist;\n} catch (e) {\n  snap = $json.snapshot || null;\n  alert = $json.alert || null;\n}\nreturn [{ json: { snapshot: snap, alert, capacity_persist: persist || { attempted: false } } }];\n",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2860,
+        0
+      ],
+      "name": "Restore Snapshot Context",
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\n\nconst event = $json;\nconst secret = $env.HESTIA_WEBHOOK_SECRET;\n\nif (!secret) {\n  throw new Error('HESTIA_WEBHOOK_SECRET não está disponível no ambiente do n8n.');\n}\n\n// Reutiliza rota hestia-alerts (deliver_only): texto formatado = mensagem Telegram.\nconst body = JSON.stringify({\n  alert: {\n    text: event.alert.text,\n  },\n});\n\nconst timestamp = String(Math.floor(Date.now() / 1000));\nconst canonicalPayload = `${timestamp}.${body}`;\nconst signature = crypto\n  .createHmac('sha256', secret)\n  .update(canonicalPayload, 'utf8')\n  .digest('hex');\n\nreturn [{\n  json: {\n    ...event,\n    hermes_request: {\n      body,\n      timestamp,\n      signature,\n      body_bytes: Buffer.byteLength(body, 'utf8'),\n    },\n  },\n}];\n",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3080,
+        0
+      ],
+      "name": "Generate HMAC",
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "{{$env.HERMES_URL}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Webhook-Timestamp",
+              "value": "={{ $json.hermes_request.timestamp }}"
+            },
+            {
+              "name": "X-Webhook-Signature-V2",
+              "value": "={{ $json.hermes_request.signature }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.hermes_request.body }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3300,
+        0
+      ],
+      "name": "Send Weekly Report to Hestia",
+      "executeOnce": true
+    }
+  ],
+  "connections": {
+    "Weekly Schedule": {
+      "main": [
+        [
+          {
+            "node": "Get System",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get System": {
+      "main": [
+        [
+          {
+            "node": "Get Storage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Storage": {
+      "main": [
+        [
+          {
+            "node": "Get Disk Capacity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Disk Capacity": {
+      "main": [
+        [
+          {
+            "node": "Get Docker",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Docker": {
+      "main": [
+        [
+          {
+            "node": "Get Backups",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Backups": {
+      "main": [
+        [
+          {
+            "node": "Get Current Week Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Current Week Events": {
+      "main": [
+        [
+          {
+            "node": "Get Previous Week Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Previous Week Events": {
+      "main": [
+        [
+          {
+            "node": "Get Capacity History",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Capacity History": {
+      "main": [
+        [
+          {
+            "node": "Build Weekly Snapshot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Weekly Snapshot": {
+      "main": [
+        [
+          {
+            "node": "Prepare Weekly Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Weekly Message": {
+      "main": [
+        [
+          {
+            "node": "Prepare Capacity Persist",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Capacity Persist": {
+      "main": [
+        [
+          {
+            "node": "Store Capacity Snapshot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Capacity Snapshot": {
+      "main": [
+        [
+          {
+            "node": "Restore Snapshot Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Restore Snapshot Context": {
+      "main": [
+        [
+          {
+            "node": "Generate HMAC",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate HMAC": {
+      "main": [
+        [
+          {
+            "node": "Send Weekly Report to Hestia",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "timezone": "America/Sao_Paulo"
+  },
+  "meta": {
+    "templateSource": "VinyLab-Automation-Hub",
+    "sanitized": true
+  },
+  "pinData": {},
+  "active": false
+}

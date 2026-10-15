@@ -1,0 +1,162 @@
+{
+  "name": "08 - RAG INGESTION",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ],
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "{{$env.OMEAB_SERVICE_URL}}/scan",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        240,
+        0
+      ],
+      "name": "Call RAG Scan",
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const scan = $json;\nconst now = new Date().toISOString();\nconst items = [];\n\nconst results = Array.isArray(scan.results) ? scan.results : [];\nfor (const r of results) {\n  if (r.status === 'indexed') {\n    items.push({\n      json: {\n        should_emit: true,\n        source: 'rag_ingestion',\n        severity: 'info',\n        component: 'knowledge',\n        event: 'document_indexed',\n        status: 'completed',\n        timestamp: now,\n        message: 'Documento indexado no RAG.',\n        requires_attention: false,\n        suggested_action: null,\n        details: {\n          document_id: r.document_id ?? null,\n          filename: r.filename ?? null,\n          extension: r.extension ?? null,\n          chunks: r.chunks ?? null,\n          content_hash: r.content_hash ?? null,\n          elapsed_ms: r.elapsed_ms ?? null,\n          // NÃO incluir conteúdo/chunks/texto/embedding\n        },\n        scan_summary: {\n          scanned: scan.scanned,\n          indexed: scan.indexed,\n          skipped: scan.skipped,\n          errors: (scan.errors || []).length,\n        },\n      },\n    });\n  } else if (r.status === 'unsupported' || r.status === 'error') {\n    const sev = r.status === 'unsupported' || r.reason === 'no_text' ? 'warning' : 'error';\n    items.push({\n      json: {\n        should_emit: true,\n        source: 'rag_ingestion',\n        severity: sev,\n        component: 'knowledge',\n        event: r.status === 'unsupported' ? 'document_unsupported' : 'document_ingest_error',\n        status: 'failed',\n        timestamp: now,\n        message: r.status === 'unsupported'\n          ? 'Documento não suportado ou sem texto extraível.'\n          : 'Falha ao indexar documento no RAG.',\n        requires_attention: sev === 'error',\n        suggested_action: null,\n        details: {\n          filename: r.filename ?? null,\n          extension: r.extension ?? null,\n          reason: r.reason ?? null,\n          status: r.status,\n        },\n      },\n    });\n  }\n}\n\n// Sem indexed/erro relevante: emitir item silencioso para não quebrar fluxo\nif (!items.length) {\n  items.push({\n    json: {\n      should_emit: false,\n      source: 'rag_ingestion',\n      scan_summary: {\n        scanned: scan.scanned ?? 0,\n        indexed: scan.indexed ?? 0,\n        skipped: scan.skipped ?? 0,\n        errors: (scan.errors || []).length,\n      },\n    },\n  });\n}\n\nreturn items;\n",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        0
+      ],
+      "name": "Prepare RAG Events"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.should_emit }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        720,
+        0
+      ],
+      "name": "Should Emit Event?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "{{$env.N8N_WEBHOOK_BASE}}/webhook/hestia-event",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{\n{\n  source: $json.source,\n  severity: $json.severity,\n  component: $json.component,\n  event: $json.event,\n  status: $json.status,\n  timestamp: $json.timestamp,\n  message: $json.message,\n  details: $json.details,\n  requires_attention: $json.requires_attention,\n  suggested_action: $json.suggested_action\n}\n}}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        960,
+        -80
+      ],
+      "name": "Send to Hestia Event Bus",
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Call RAG Scan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call RAG Scan": {
+      "main": [
+        [
+          {
+            "node": "Prepare RAG Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare RAG Events": {
+      "main": [
+        [
+          {
+            "node": "Should Emit Event?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Emit Event?": {
+      "main": [
+        [
+          {
+            "node": "Send to Hestia Event Bus",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "timezone": "America/Sao_Paulo"
+  },
+  "meta": {
+    "templateSource": "VinyLab-Automation-Hub",
+    "sanitized": true
+  },
+  "pinData": {},
+  "active": false
+}

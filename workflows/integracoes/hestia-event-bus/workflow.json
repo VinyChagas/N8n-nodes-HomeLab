@@ -1,0 +1,491 @@
+{
+  "name": "00 - HESTIA EVENT BUS",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "hestia-event",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "name": "Webhook",
+      "webhookId": "{{WEBHOOK_ID}}"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $json.body ?? $json;\n\nconst allowedSeverities = [\n  'info',\n  'warning',\n  'error',\n  'critical'\n];\n\nlet severity = String(\n  input.severity ?? 'info'\n).toLowerCase();\n\nif (!allowedSeverities.includes(severity)) {\n  severity = 'info';\n}\n\nconst now = new Date().toISOString();\n\nconst correlationId =\n  input.correlation_id ??\n  `${input.source ?? 'unknown'}-${Date.now()}`;\n\nreturn [\n  {\n    json: {\n      source: input.source ?? 'unknown',\n      severity: severity,\n      component: input.component ?? 'unknown',\n      event: input.event ?? 'unknown_event',\n      status: input.status ?? 'active',\n\n      timestamp: input.timestamp ?? now,\n\n      message:\n        input.message ??\n        'Evento recebido sem descrição.',\n\n      details:\n        input.details ?? {},\n\n      correlation_id:\n        correlationId,\n\n      requires_attention:\n        input.requires_attention ?? false,\n\n      suggested_action:\n        input.suggested_action ?? null,\n\n      received_at: now,\n\n      event_bus: {\n        name: 'HESTIA_EVENT_BUS',\n        version: '1.0'\n      }\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        0
+      ],
+      "name": "Normalize Event"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.severity }}",
+                    "rightValue": "info",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "e994fbc9-d8ee-4a6f-8b47-bb67242fd97f"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "INFO"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "1c817d2d-33dd-4f97-966a-7ae6dad983b7",
+                    "leftValue": "={{ $json.severity }}",
+                    "rightValue": "warning",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "WARNING"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "7f473d0d-49b7-4994-86ca-1cde51f429a8",
+                    "leftValue": "={{ $json.severity }}",
+                    "rightValue": "error",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "ERROR"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "652af27c-3919-4c02-a09f-59d0d70ad479",
+                    "leftValue": "={{ $json.severity }}",
+                    "rightValue": "critical",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "CRITICAL"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        416,
+        0
+      ],
+      "name": "Route by Severity"
+    },
+    {
+      "parameters": {
+        "schema": {
+          "__rl": true,
+          "mode": "list",
+          "value": "public"
+        },
+        "table": {
+          "__rl": true,
+          "value": "hestia_events",
+          "mode": "list",
+          "cachedResultName": "hestia_events"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "requires_attention": "={{ $json.requires_attention }}",
+            "source": "={{ $json.source }}",
+            "severity": "={{ $json.severity }}",
+            "component": "={{ $json.component }}",
+            "event": "={{ $json.event }}",
+            "status": "={{ $json.status }}",
+            "timestamp": "={{ $json.timestamp }}",
+            "message": "={{ $json.message }}",
+            "details": "={{ JSON.stringify($json.details ?? {}) }}",
+            "correlation_id": "={{ $json.correlation_id }}",
+            "suggested_action": "={{ $json.suggested_action }}",
+            "received_at": "={{ $json.received_at }}"
+          },
+          "matchingColumns": [
+            "id"
+          ],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "severity",
+              "displayName": "severity",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "component",
+              "displayName": "component",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "event",
+              "displayName": "event",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "timestamp",
+              "displayName": "timestamp",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "message",
+              "displayName": "message",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "details",
+              "displayName": "details",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "object",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "correlation_id",
+              "displayName": "correlation_id",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "requires_attention",
+              "displayName": "requires_attention",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "boolean",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "suggested_action",
+              "displayName": "suggested_action",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "received_at",
+              "displayName": "received_at",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "created_at",
+              "displayName": "created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": true,
+              "removed": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        752,
+        -112
+      ],
+      "name": "Persist Event",
+      "credentials": {
+        "postgres": {
+          "id": "{{CREDENTIAL_ID}}",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const event = $json;\n\nconst icons = {\n  error: '🔴',\n  critical: '🚨'\n};\n\nconst labels = {\n  error: 'ERRO',\n  critical: 'CRÍTICO'\n};\n\nconst severity = event.severity;\n\nreturn [{\n  json: {\n    ...event,\n\n    alert: {\n      type: 'HESTIA_SYSTEM_ALERT',\n      priority: severity === 'critical' ? 'urgent' : 'high',\n\n      title: `${icons[severity] ?? '⚠️'} ${labels[severity] ?? severity.toUpperCase()} — ${event.component}`,\n\n      text: [\n        `${icons[severity] ?? '⚠️'} HESTIA — ${labels[severity] ?? severity.toUpperCase()}`,\n        '',\n        `Componente: ${event.component}`,\n        `Evento: ${event.event}`,\n        `Status: ${event.status}`,\n        '',\n        event.message,\n        '',\n        event.suggested_action\n          ? `Ação sugerida: ${event.suggested_action}`\n          : null,\n        '',\n        `Origem: ${event.source}`,\n        `ID: ${event.correlation_id}`\n      ].filter(line => line !== null).join('\\n')\n    }\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        752,
+        224
+      ],
+      "name": "Prepare Alert"
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\n\nconst event = $json;\n\n// Secret armazenado no ambiente do n8n.\n// Nunca fica gravado dentro do workflow.\nconst secret = $env.HESTIA_WEBHOOK_SECRET;\n\nif (!secret) {\n  throw new Error('HESTIA_WEBHOOK_SECRET não está disponível no ambiente do n8n.');\n}\n\n// O Hermes espera que o body possua alert.text.\n// Serializamos UMA ÚNICA VEZ.\n// Esta mesma string deverá ser enviada pelo HTTP Request.\nconst body = JSON.stringify({\n  alert: {\n    text: event.alert.text\n  }\n});\n\n// Unix timestamp em segundos\nconst timestamp = String(Math.floor(Date.now() / 1000));\n\n// Hermes HMAC V2:\n// timestamp + \".\" + RAW BODY\nconst canonicalPayload = `${timestamp}.${body}`;\n\n// HMAC-SHA256 → hexadecimal minúsculo\nconst signature = crypto\n  .createHmac('sha256', secret)\n  .update(canonicalPayload, 'utf8')\n  .digest('hex');\n\nreturn [\n  {\n    json: {\n      ...event,\n\n      hermes_request: {\n        body,\n        timestamp,\n        signature\n      }\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1088,
+        48
+      ],
+      "name": "Generate HMAC"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "{{$env.HERMES_URL}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Webhook-Timestamp",
+              "value": "={{ $json.hermes_request.timestamp }}"
+            },
+            {
+              "name": "X-Webhook-Signature-V2",
+              "value": "={{ $json.hermes_request.signature }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.hermes_request.body }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1376,
+        -96
+      ],
+      "name": "Send to Hestia"
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Event": {
+      "main": [
+        [
+          {
+            "node": "Route by Severity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Severity": {
+      "main": [
+        [
+          {
+            "node": "Persist Event",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Persist Event",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Persist Event",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Prepare Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Persist Event",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Prepare Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Alert": {
+      "main": [
+        [
+          {
+            "node": "Generate HMAC",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Persist Event": {
+      "main": [
+        []
+      ]
+    },
+    "Generate HMAC": {
+      "main": [
+        [
+          {
+            "node": "Send to Hestia",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "meta": {
+    "templateSource": "VinyLab-Automation-Hub",
+    "sanitized": true
+  },
+  "pinData": {},
+  "active": false
+}

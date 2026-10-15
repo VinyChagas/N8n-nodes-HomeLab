@@ -1,0 +1,256 @@
+{
+  "name": "01 - Storage Guardian",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        -16
+      ],
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "url": "{{$env.SERVICE_BASE_URL}}/v1/storage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.OMEAB_HEALTH_TOKEN }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        208,
+        -16
+      ],
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    e.event AS previous_event,\n    e.severity AS previous_severity,\n    e.status AS previous_status,\n    e.timestamp AS previous_timestamp,\n    e.message AS previous_message,\n    e.created_at AS previous_created_at\nFROM (\n    SELECT 1\n) AS dummy\nLEFT JOIN LATERAL (\n    SELECT\n        event,\n        severity,\n        status,\n        timestamp,\n        message,\n        created_at\n    FROM hestia_events\n    WHERE source = 'storage_guardian'\n      AND component = 'storage'\n    ORDER BY created_at DESC\n    LIMIT 1\n) e ON TRUE;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        640,
+        96
+      ],
+      "name": "Execute a SQL query",
+      "credentials": {
+        "postgres": {
+          "id": "{{CREDENTIAL_ID}}",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $json;\n\nconst previousEvent = data.previous_event ?? null;\nconst previousSeverity = data.previous_severity ?? null;\nconst previousStatus = data.previous_status ?? null;\n\nlet shouldNotify = false;\nlet reason = 'no_change';\n\n// ==================================================\n// 1. PRIMEIRO INCIDENTE\n// ==================================================\n\nif (\n  previousEvent === null &&\n  data.should_emit === true\n) {\n  shouldNotify = true;\n  reason = 'first_incident';\n}\n\n// ==================================================\n// 2. RECUPERAÇÃO\n// ==================================================\n\nif (\n  data.event === 'storage_healthy' &&\n  previousEvent !== null &&\n  previousStatus !== 'healthy'\n) {\n  return [\n    {\n      json: {\n        ...data,\n\n        should_emit: true,\n\n        severity: 'info',\n        event: 'storage_recovered',\n        status: 'healthy',\n\n        message:\n          `O storage principal do OMEAB voltou a operar normalmente. ` +\n          `O incidente anterior era: ${previousEvent}.`,\n\n        requires_attention: false,\n\n        suggested_action:\n          'Nenhuma ação imediata necessária. Continuar monitorando a estabilidade do storage.',\n\n        notification: {\n          should_notify: true,\n          reason: 'recovered',\n          previous_event: previousEvent,\n          previous_severity: previousSeverity,\n          previous_status: previousStatus\n        }\n      }\n    }\n  ];\n}\n\n// ==================================================\n// 3. NOVO TIPO DE INCIDENTE\n// ==================================================\n\nif (\n  data.should_emit === true &&\n  previousEvent !== null &&\n  data.event !== previousEvent\n) {\n  shouldNotify = true;\n  reason = 'incident_changed';\n}\n\n// ==================================================\n// 4. ESCALADA DE SEVERIDADE\n// ==================================================\n\nif (\n  data.should_emit === true &&\n  previousEvent !== null &&\n  data.event === previousEvent\n) {\n\n  const severityRank = {\n    info: 1,\n    warning: 2,\n    error: 3,\n    critical: 4\n  };\n\n  const currentRank =\n    severityRank[data.severity] ?? 0;\n\n  const previousRank =\n    severityRank[previousSeverity] ?? 0;\n\n  if (currentRank > previousRank) {\n    shouldNotify = true;\n    reason = 'severity_escalated';\n  }\n}\n\n// ==================================================\n// RESULTADO\n// ==================================================\n\nreturn [\n  {\n    json: {\n      ...data,\n\n      notification: {\n        should_notify: shouldNotify,\n        reason,\n\n        previous_event: previousEvent,\n        previous_severity: previousSeverity,\n        previous_status: previousStatus\n      }\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        0
+      ],
+      "name": "Decide Notification"
+    },
+    {
+      "parameters": {
+        "jsCode": "const s = $json;\n\nconst errors = s.kernel_errors ?? {};\n\nconst ioErrors = Number(errors.io_error ?? 0);\nconst ext4Errors = Number(errors.ext4_error ?? 0);\nconst bufferErrors = Number(errors.buffer_io_error ?? 0);\nconst usbDisconnects = Number(errors.usb_disconnect ?? 0);\nconst usbResets = Number(errors.usb_reset ?? 0);\nconst remountRO = Number(errors.remount_read_only ?? 0);\n\nlet severity = 'info';\nlet event = 'storage_healthy';\nlet message = 'O storage principal do OMEAB está operando normalmente.';\nlet requiresAttention = false;\nlet suggestedAction = null;\nlet shouldEmit = false;\n\n// --------------------------------------------------\n// CRITICAL\n// --------------------------------------------------\n\nif (!s.device_present) {\n  severity = 'critical';\n  event = 'storage_device_missing';\n  message = 'O dispositivo principal de storage /dev/sda não foi encontrado.';\n  requiresAttention = true;\n  shouldEmit = true;\n  suggestedAction =\n    'Verificar alimentação, conexão USB e estado do enclosure ACASIS antes de qualquer ação no filesystem.';\n}\n\nelse if (!s.mounted) {\n  severity = 'critical';\n  event = 'storage_not_mounted';\n  message = 'O storage principal não está montado em /srv/storage.';\n  requiresAttention = true;\n  shouldEmit = true;\n  suggestedAction =\n    'Verificar o dispositivo e os logs do kernel. Não executar montagem forçada ou fsck automaticamente.';\n}\n\nelse if (\n  s.mode === 'ro' ||\n  s.emergency_ro === true\n) {\n  severity = 'critical';\n  event = 'filesystem_read_only';\n  message =\n    'O filesystem principal entrou em modo somente leitura (read-only).';\n  requiresAttention = true;\n  shouldEmit = true;\n  suggestedAction =\n    'Investigar os erros de I/O e EXT4 antes de reiniciar, remontar ou executar fsck.';\n}\n\nelse if (s.read_test === false) {\n  severity = 'critical';\n  event = 'storage_read_failure';\n  message =\n    'O Health Agent não conseguiu realizar uma leitura simples em /srv/storage.';\n  requiresAttention = true;\n  shouldEmit = true;\n  suggestedAction =\n    'Investigar imediatamente logs do kernel, conexão USB e integridade do dispositivo.';\n}\n\nelse if (\n  ioErrors > 0 ||\n  ext4Errors > 0 ||\n  bufferErrors > 0 ||\n  remountRO > 0\n) {\n  severity = 'critical';\n  event = 'storage_io_errors';\n  message =\n    `Foram detectados erros recentes no storage: ` +\n    `I/O=${ioErrors}, EXT4=${ext4Errors}, ` +\n    `Buffer I/O=${bufferErrors}, Remount RO=${remountRO}.`;\n  requiresAttention = true;\n  shouldEmit = true;\n  suggestedAction =\n    'Investigar os logs do kernel e a estabilidade física do storage antes de qualquer reparo.';\n}\n\n// --------------------------------------------------\n// WARNING\n// --------------------------------------------------\n\nelse if (usbDisconnects > 0) {\n  severity = 'warning';\n  event = 'storage_usb_disconnect';\n  message =\n    `Foram detectados ${usbDisconnects} eventos recentes de desconexão USB do storage.`;\n  requiresAttention = true;\n  shouldEmit = true;\n  suggestedAction =\n    'Verificar alimentação, cabo USB e estabilidade do enclosure.';\n}\n\nelse if (usbResets > 0) {\n  severity = 'warning';\n  event = 'storage_usb_reset';\n  message =\n    `Foram detectados ${usbResets} resets USB recentes relacionados ao storage.`;\n  requiresAttention = false;\n  shouldEmit = true;\n  suggestedAction =\n    'Acompanhar a estabilidade da conexão USB e verificar se os resets continuam ocorrendo.';\n}\n\n// --------------------------------------------------\n// HEALTHY\n// --------------------------------------------------\n\nelse if (s.healthy === true) {\n  severity = 'info';\n  event = 'storage_healthy';\n  shouldEmit = false;\n}\n\n// --------------------------------------------------\n// EVENTO NORMALIZADO\n// --------------------------------------------------\n\nreturn [\n  {\n    json: {\n      should_emit: shouldEmit,\n\n      source: 'storage_guardian',\n      severity,\n      component: 'storage',\n      event,\n      status: s.healthy ? 'healthy' : 'active',\n\n      timestamp:\n        s.checked_at ?? new Date().toISOString(),\n\n      message,\n\n      details: {\n        device_present: s.device_present,\n        mounted: s.mounted,\n        device: s.device,\n        mountpoint: s.mountpoint,\n        filesystem: s.filesystem,\n        mount_options: s.mount_options,\n        mode: s.mode,\n\n        emergency_ro: s.emergency_ro,\n        read_test: s.read_test,\n\n        total_bytes: s.total_bytes,\n        used_bytes: s.used_bytes,\n        available_bytes: s.available_bytes,\n        used_percent: s.used_percent,\n        inode_percent: s.inode_percent,\n\n        kernel_errors: s.kernel_errors,\n        recent_errors: s.recent_errors\n      },\n\n      requires_attention: requiresAttention,\n      suggested_action: suggestedAction\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        416,
+        -16
+      ],
+      "name": "Evaluate Storage"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        864,
+        0
+      ],
+      "name": "Merge Storage State"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "154003a6-7daa-42de-b200-2aee1c89913c",
+              "leftValue": "={{ $json.notification.should_notify }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1216,
+        0
+      ],
+      "name": "Should Notify?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "{{$env.N8N_WEBHOOK_BASE}}/webhook/hestia-event",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{\n{\n  source: $json.source,\n  severity: $json.severity,\n  component: $json.component,\n  event: $json.event,\n  status: $json.status,\n  timestamp: $json.timestamp,\n  message: $json.message,\n  details: $json.details,\n  requires_attention: $json.requires_attention,\n  suggested_action: $json.suggested_action\n}\n}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1424,
+        -96
+      ],
+      "name": "Send to Hestia Event Bus"
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Storage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute a SQL query": {
+      "main": [
+        [
+          {
+            "node": "Merge Storage State",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Evaluate Storage": {
+      "main": [
+        [
+          {
+            "node": "Execute a SQL query",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge Storage State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Storage State": {
+      "main": [
+        [
+          {
+            "node": "Decide Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decide Notification": {
+      "main": [
+        [
+          {
+            "node": "Should Notify?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Notify?": {
+      "main": [
+        [
+          {
+            "node": "Send to Hestia Event Bus",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "meta": {
+    "templateSource": "VinyLab-Automation-Hub",
+    "sanitized": true
+  },
+  "pinData": {},
+  "active": false
+}

@@ -1,0 +1,258 @@
+{
+  "name": "05 - DISK CAPACITY",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ],
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "url": "{{$env.SERVICE_BASE_URL}}/v1/disk-capacity",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.OMEAB_HEALTH_TOKEN }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        220,
+        0
+      ],
+      "name": "Get Disk Capacity"
+    },
+    {
+      "parameters": {
+        "jsCode": "const payload = $json;\nconst filesystems = Array.isArray(payload.filesystems) ? payload.filesystems : [];\nconst timestamp = payload.timestamp ?? new Date().toISOString();\nconst summary = payload.summary ?? {};\n\n// Limiares: preferir os do Health Agent (fonte única em disk_capacity.py).\n// Fallback local apenas se o agent não enviar thresholds.\nconst THRESHOLDS = payload.thresholds ?? {\n  warning: 70,\n  error: 85,\n  critical: 95,\n};\n\nfunction formatFree(bytes) {\n  const n = Number(bytes);\n  if (!Number.isFinite(n) || n < 0) return 'espaço livre desconhecido';\n  const TB = 1024 ** 4;\n  const GB = 1024 ** 3;\n  if (n >= TB) return `${(n / TB).toFixed(2)} TB livres`;\n  if (n >= GB) return `${(n / GB).toFixed(0)} GB livres`;\n  return `${Math.max(1, Math.round(n / (1024 ** 2)))} MB livres`;\n}\n\nfunction mountLabel(mount) {\n  if (mount === '/') return 'NVMe raiz /';\n  if (mount === '/srv/storage') return `Storage ${mount}`;\n  return `Storage ${mount}`;\n}\n\nfunction stateFromPercent(usedPercent) {\n  if (usedPercent >= Number(THRESHOLDS.critical)) return 'critical';\n  if (usedPercent >= Number(THRESHOLDS.error)) return 'error';\n  if (usedPercent >= Number(THRESHOLDS.warning)) return 'warning';\n  return 'normal';\n}\n\nfunction thresholdForState(state) {\n  if (state === 'critical') return Number(THRESHOLDS.critical);\n  if (state === 'error') return Number(THRESHOLDS.error);\n  if (state === 'warning') return Number(THRESHOLDS.warning);\n  return 0;\n}\n\nconst EVENT_BY_STATE = {\n  warning: 'disk_capacity_warning',\n  error: 'disk_capacity_error',\n  critical: 'disk_capacity_critical',\n  normal: 'disk_capacity_normal',\n};\n\nconst ACTION_BY_STATE = {\n  warning: 'Revisar crescimento e arquivos recentes.',\n  error: 'Planejar liberação de espaço e identificar maiores consumidores.',\n  critical: 'Priorizar análise imediata antes de novos downloads/backups.',\n  normal: null,\n};\n\nconst items = [];\n\nfor (const fs of filesystems) {\n  const mount = String(fs?.mount ?? '').trim();\n  if (!mount) continue;\n\n  const usedPercent = Number(fs.used_percent ?? 0);\n  const capacityState =\n    fs.capacity_state && fs.capacity_state !== 'unknown'\n      ? String(fs.capacity_state).toLowerCase()\n      : stateFromPercent(usedPercent);\n\n  const unavailable = fs.available === false;\n  let severity = 'info';\n  let event = 'disk_capacity_normal';\n  let status = 'healthy';\n  let shouldEmit = false;\n  let requiresAttention = false;\n  let suggestedAction = null;\n  let message = `${mountLabel(mount)} em utilização normal (${usedPercent}%).`;\n\n  if (unavailable) {\n    severity = 'error';\n    event = 'disk_capacity_error';\n    status = 'active';\n    shouldEmit = true;\n    requiresAttention = true;\n    message = `Filesystem ${mount} indisponível para medição de capacidade.`;\n    suggestedAction =\n      'Verificar se o mount está acessível. Não executar remount/fsck automaticamente.';\n  } else if (capacityState === 'critical') {\n    severity = 'critical';\n    event = EVENT_BY_STATE.critical;\n    status = 'active';\n    shouldEmit = true;\n    requiresAttention = true;\n    message =\n      `${mountLabel(mount)} atingiu ${usedPercent}% de utilização. ` +\n      'Espaço disponível em nível crítico.';\n    suggestedAction = ACTION_BY_STATE.critical;\n  } else if (capacityState === 'error') {\n    severity = 'error';\n    event = EVENT_BY_STATE.error;\n    status = 'active';\n    shouldEmit = true;\n    requiresAttention = true;\n    message =\n      `${mountLabel(mount)} atingiu ${usedPercent}% de utilização. ` +\n      `Restam ${formatFree(fs.free_bytes)}.`;\n    suggestedAction = ACTION_BY_STATE.error;\n  } else if (capacityState === 'warning') {\n    severity = 'warning';\n    event = EVENT_BY_STATE.warning;\n    status = 'active';\n    shouldEmit = true;\n    requiresAttention = true;\n    message =\n      `${mountLabel(mount)} atingiu ${usedPercent}% de utilização. ` +\n      `Restam ${formatFree(fs.free_bytes)}.`;\n    suggestedAction = ACTION_BY_STATE.warning;\n  } else {\n    severity = 'info';\n    event = EVENT_BY_STATE.normal;\n    status = 'healthy';\n    shouldEmit = false;\n    requiresAttention = false;\n    message = `${mountLabel(mount)} em utilização normal (${usedPercent}%).`;\n    suggestedAction = null;\n  }\n\n  items.push({\n    json: {\n      should_emit: shouldEmit,\n      source: 'disk_capacity',\n      severity,\n      component: 'filesystem',\n      event,\n      status,\n      timestamp,\n      message,\n      details: {\n        mount,\n        device: fs.device ?? null,\n        filesystem: fs.filesystem ?? null,\n        total_bytes: fs.total_bytes ?? 0,\n        used_bytes: fs.used_bytes ?? 0,\n        free_bytes: fs.free_bytes ?? 0,\n        used_percent: usedPercent,\n        free_percent: fs.free_percent ?? null,\n        total_gb: fs.total_gb ?? null,\n        used_gb: fs.used_gb ?? null,\n        free_gb: fs.free_gb ?? null,\n        threshold: thresholdForState(capacityState),\n        capacity_state: capacityState,\n        previous_capacity_state: null,\n        thresholds: THRESHOLDS,\n        available: fs.available !== false,\n        summary,\n        notification_reason: null,\n      },\n      requires_attention: requiresAttention,\n      suggested_action: suggestedAction,\n    },\n  });\n}\n\nreturn items;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ],
+      "name": "Evaluate Filesystems"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    e.event AS previous_event,\n    e.severity AS previous_severity,\n    e.status AS previous_status,\n    e.timestamp AS previous_timestamp,\n    e.message AS previous_message,\n    e.created_at AS previous_created_at,\n    e.details AS previous_details\nFROM (SELECT 1) AS dummy\nLEFT JOIN LATERAL (\n    SELECT\n        event,\n        severity,\n        status,\n        timestamp,\n        message,\n        created_at,\n        details\n    FROM hestia_events\n    WHERE source = 'disk_capacity'\n      AND component = 'filesystem'\n      AND details->>'mount' = '{{ $json.details.mount }}'\n    ORDER BY created_at DESC\n    LIMIT 1\n) e ON TRUE;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        680,
+        160
+      ],
+      "name": "Get Previous Filesystem State",
+      "credentials": {
+        "postgres": {
+          "id": "{{CREDENTIAL_ID}}",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        900,
+        0
+      ],
+      "name": "Merge State"
+    },
+    {
+      "parameters": {
+        "jsCode": "const allItems = $input.all();\nconst results = [];\n\nconst severityRank = {\n  info: 1,\n  warning: 2,\n  error: 3,\n  critical: 4,\n};\n\nconst capacityRank = {\n  normal: 0,\n  warning: 1,\n  error: 2,\n  critical: 3,\n  unknown: 2,\n};\n\n// Decisão de downgrade:\n// CRITICAL→ERROR ou ERROR→WARNING NÃO gera notificação (silencioso).\n// Motivo: evitar spam por oscilação pequena entre faixas altas.\n// Só notifica recuperação completa (qualquer faixa → normal) ou escalada.\nconst NOTIFY_ON_DEESCALATION = false;\n\nfor (const item of allItems) {\n  const data = item.json;\n\n  const previousEvent = data.previous_event ?? null;\n  const previousSeverity = data.previous_severity ?? null;\n  const previousStatus = data.previous_status ?? null;\n\n  let previousDetails = data.previous_details ?? null;\n  if (typeof previousDetails === 'string') {\n    try {\n      previousDetails = JSON.parse(previousDetails);\n    } catch (e) {\n      previousDetails = null;\n    }\n  }\n\n  const previousCapacityState =\n    previousDetails?.capacity_state ??\n    (previousEvent === 'disk_capacity_critical'\n      ? 'critical'\n      : previousEvent === 'disk_capacity_error'\n        ? 'error'\n        : previousEvent === 'disk_capacity_warning'\n          ? 'warning'\n          : previousEvent === 'disk_capacity_recovered' || previousStatus === 'healthy'\n            ? 'normal'\n            : null);\n\n  const currentCapacityState = data.details?.capacity_state ?? 'unknown';\n\n  const details = {\n    ...(data.details ?? {}),\n    previous_capacity_state: previousCapacityState,\n  };\n\n  let shouldNotify = false;\n  let reason = 'no_change';\n  let out = null;\n\n  // 1. PRIMEIRO INCIDENTE (cruzou faixa de atenção)\n  if (previousEvent === null && data.should_emit === true) {\n    shouldNotify = true;\n    reason = 'first_incident';\n  }\n\n  // 2. RECUPERAÇÃO TOTAL (qualquer incidente → normal)\n  else if (\n    data.event === 'disk_capacity_normal' &&\n    previousEvent !== null &&\n    previousEvent !== 'disk_capacity_recovered' &&\n    previousStatus !== 'healthy' &&\n    previousCapacityState !== 'normal'\n  ) {\n    const mount = details.mount ?? 'filesystem';\n    const label = mount === '/' ? 'NVMe raiz /' : `Storage ${mount}`;\n    out = {\n      ...data,\n      should_emit: true,\n      severity: 'info',\n      event: 'disk_capacity_recovered',\n      status: 'healthy',\n      message:\n        `${label} voltou a utilização normal (${details.used_percent}%). ` +\n        `Estado anterior: ${previousCapacityState ?? previousEvent}.`,\n      requires_attention: false,\n      suggested_action:\n        'Nenhuma ação imediata necessária. Continuar monitorando o crescimento do disco.',\n      details: {\n        ...details,\n        capacity_state: 'normal',\n        notification_reason: 'recovered',\n      },\n      notification: {\n        should_notify: true,\n        reason: 'recovered',\n        previous_event: previousEvent,\n        previous_severity: previousSeverity,\n        previous_status: previousStatus,\n        previous_capacity_state: previousCapacityState,\n      },\n    };\n  }\n\n  // 3. ESCALADA DE FAIXA / SEVERIDADE\n  else if (\n    data.should_emit === true &&\n    previousEvent !== null &&\n    previousEvent !== 'disk_capacity_recovered'\n  ) {\n    const currentRank = capacityRank[currentCapacityState] ?? severityRank[data.severity] ?? 0;\n    const previousRank =\n      capacityRank[previousCapacityState] ?? severityRank[previousSeverity] ?? 0;\n\n    if (currentRank > previousRank) {\n      shouldNotify = true;\n      reason = 'severity_escalated';\n    } else if (currentRank < previousRank) {\n      // Downgrade entre faixas de alerta — silencioso por padrão\n      reason = 'severity_deescalated';\n      shouldNotify = NOTIFY_ON_DEESCALATION;\n    } else if (data.event !== previousEvent && currentRank === previousRank) {\n      shouldNotify = true;\n      reason = 'incident_changed';\n    } else {\n      reason = 'no_change';\n      shouldNotify = false;\n    }\n  }\n\n  // 4. Normal contínuo sem histórico relevante\n  else if (data.should_emit !== true) {\n    reason = 'no_change';\n    shouldNotify = false;\n  }\n\n  if (out === null) {\n    details.notification_reason = reason;\n    out = {\n      ...data,\n      details,\n      notification: {\n        should_notify: shouldNotify,\n        reason,\n        previous_event: previousEvent,\n        previous_severity: previousSeverity,\n        previous_status: previousStatus,\n        previous_capacity_state: previousCapacityState,\n      },\n    };\n  }\n\n  results.push({ json: out });\n}\n\nreturn results;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        0
+      ],
+      "name": "Decide Notification"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "734dce91-4f72-4474-8ad0-87c7a5fa80a1",
+              "leftValue": "={{ $json.notification.should_notify }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1340,
+        0
+      ],
+      "name": "Should Notify?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "{{$env.N8N_WEBHOOK_BASE}}/webhook/hestia-event",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{\n{\n  source: $json.source,\n  severity: $json.severity,\n  component: $json.component,\n  event: $json.event,\n  status: $json.status,\n  timestamp: $json.timestamp,\n  message: $json.message,\n  details: {\n    ...$json.details,\n    notification_reason: $json.notification?.reason ?? $json.details?.notification_reason ?? null\n  },\n  requires_attention: $json.requires_attention,\n  suggested_action: $json.suggested_action\n}\n}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1560,
+        -120
+      ],
+      "name": "Send to Hestia Event Bus"
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get Disk Capacity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Disk Capacity": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Filesystems",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Filesystems": {
+      "main": [
+        [
+          {
+            "node": "Get Previous Filesystem State",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Previous Filesystem State": {
+      "main": [
+        [
+          {
+            "node": "Merge State",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge State": {
+      "main": [
+        [
+          {
+            "node": "Decide Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decide Notification": {
+      "main": [
+        [
+          {
+            "node": "Should Notify?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Notify?": {
+      "main": [
+        [
+          {
+            "node": "Send to Hestia Event Bus",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "meta": {
+    "templateSource": "VinyLab-Automation-Hub",
+    "sanitized": true
+  },
+  "pinData": {},
+  "active": false
+}

@@ -1,0 +1,116 @@
+{
+  "name": "21 - INCIDENT NOTIFICATION MANAGER",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      },
+      "name": "Every 1 Minute",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {},
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "{{$env.OMEAB_SERVICE_URL}}/v1/evaluate",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.OMEAB_HEALTH_TOKEN }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "name": "Run Shadow Evaluate",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        280,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const d=$input.first().json||{};\nreturn [{json:{\n  mode:'shadow',\n  enforcement:false,\n  evaluated:d.evaluated||0,\n  ignored:d.ignored||0,\n  decisions:Array.isArray(d.decisions)?d.decisions.length:0,\n  metrics:d.metrics||{},\n  bootstrap:!!d.bootstrap,\n  lock_acquired:d.lock_acquired!==false,\n  execution_time_ms:d.execution_time_ms||0,\n  note:'Shadow Mode — no Event Bus / Telegram side effects'\n}}];"
+      },
+      "name": "Shadow Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        540,
+        400
+      ]
+    }
+  ],
+  "connections": {
+    "Every 1 Minute": {
+      "main": [
+        [
+          {
+            "node": "Run Shadow Evaluate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Run Shadow Evaluate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Shadow Evaluate": {
+      "main": [
+        [
+          {
+            "node": "Shadow Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "meta": {
+    "templateSource": "VinyLab-Automation-Hub",
+    "sanitized": true
+  },
+  "pinData": {},
+  "active": false
+}

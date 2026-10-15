@@ -1,0 +1,353 @@
+{
+  "name": "19 - CONFIGURATION DRIFT GUARDIAN",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ],
+      "name": "Every 15 Minutes"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        200
+      ],
+      "name": "Manual Trigger"
+    },
+    {
+      "parameters": {
+        "url": "{{$env.OMEAB_SERVICE_URL}}/v1/configuration-drift",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.OMEAB_HEALTH_TOKEN }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        280,
+        0
+      ],
+      "name": "Get Configuration Drift",
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT component, baseline_fingerprint, current_fingerprint, drift_type, risk, status, first_seen_at, last_seen_at, resolved_at, details FROM configuration_drift_state;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        280,
+        200
+      ],
+      "name": "Get Previous States",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "{{CREDENTIAL_ID}}",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 2,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        520,
+        80
+      ],
+      "name": "Wait Context"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nfunction safe(name) {\n  try { return $(name).first().json || {}; } catch (e) { return { _error: true, _message: String(e.message || e) }; }\n}\n\nconst driftResp = safe('Get Configuration Drift');\nconst prevRows = (() => {\n  try {\n    return $('Get Previous States').all().map(i => i.json);\n  } catch (e) {\n    return [];\n  }\n})();\n\nconst now = new Date().toISOString();\nconst sevMap = { low: 'info', medium: 'warning', high: 'error', critical: 'critical' };\n\nif (driftResp._error || !driftResp.summary) {\n  return [{\n    json: {\n      skip_persist: true,\n      should_emit: false,\n      overall_status: 'degraded',\n      error: driftResp._message || driftResp.detail || 'configuration_drift_unavailable',\n      events: [],\n      persist_rows: [],\n    },\n  }];\n}\n\nif (driftResp.baseline_status === 'missing' || driftResp.drift_type === 'baseline_missing') {\n  const event = {\n    source: 'configuration_drift_guardian',\n    severity: 'warning',\n    component: 'configuration',\n    event: 'configuration_baseline_missing',\n    status: 'attention',\n    timestamp: now,\n    message: 'Baseline de configuração ausente. Nenhuma alteração automática foi feita.',\n    details: {\n      baseline_status: driftResp.baseline_status,\n      advisory_only: true,\n      auto_repair: false,\n    },\n    requires_attention: true,\n    suggested_action: 'approve_new_baseline',\n  };\n  return [{\n    json: {\n      skip_persist: false,\n      should_emit: true,\n      overall_status: 'degraded',\n      events: [event],\n      persist_rows: [],\n      meta: { last_overall_status: 'degraded', last_summary: driftResp.summary || {} },\n    },\n  }];\n}\n\nconst prevBy = {};\nfor (const r of prevRows) {\n  if (r && r.component) prevBy[r.component] = r;\n}\n\nconst persist_rows = [];\nconst events = [];\nconst items = Array.isArray(driftResp.items) ? driftResp.items : [];\n\nfor (const item of items) {\n  const component = item.component;\n  const prev = prevBy[component] || null;\n  const status = item.status || 'unknown';\n  const fpAfter = item.fingerprint_after || null;\n  const fpBefore = item.fingerprint_before || null;\n  const risk = item.risk || null;\n  const driftType = item.drift_type || null;\n\n  let emit = null;\n  let resolved_at = null;\n  let first_seen_at = prev && prev.first_seen_at ? prev.first_seen_at : null;\n\n  if (status === 'match') {\n    if (prev && prev.status === 'drift') {\n      emit = 'configuration_drift_resolved';\n      resolved_at = now;\n    }\n  } else if (status === 'drift') {\n    const sameFp = prev && prev.current_fingerprint && prev.current_fingerprint === fpAfter && prev.status === 'drift';\n    const riskEscalated = prev && prev.risk && risk && prev.risk !== risk && (\n      ['low','medium','high','critical'].indexOf(risk) > ['low','medium','high','critical'].indexOf(prev.risk)\n    );\n    if (!prev || prev.status !== 'drift') {\n      emit = item.should_emit_event || 'configuration_drift_detected';\n      first_seen_at = now;\n    } else if (!sameFp || riskEscalated) {\n      emit = item.should_emit_event || 'configuration_drift_detected';\n      if (!first_seen_at) first_seen_at = now;\n    } else {\n      emit = null; // dedup silence\n      if (!first_seen_at) first_seen_at = prev.first_seen_at || now;\n    }\n  } else if (status === 'unknown' && driftType === 'collector_partial') {\n    // no spam for persistent UFW partial\n    emit = null;\n  }\n\n  const details = {\n    change_type: item.change_type,\n    before_summary: item.before_summary,\n    after_summary: item.after_summary,\n    recommendation: item.recommendation,\n    drift_type: driftType,\n    risk,\n    advisory_only: true,\n    auto_repair: false,\n  };\n\n  persist_rows.push({\n    component,\n    baseline_fingerprint: fpBefore,\n    current_fingerprint: fpAfter,\n    drift_type: driftType,\n    risk,\n    status,\n    first_seen_at: first_seen_at,\n    last_seen_at: now,\n    resolved_at,\n    details,\n    emit,\n  });\n\n  if (emit) {\n    const severity = sevMap[risk || 'medium'] || 'warning';\n    let message;\n    if (emit === 'configuration_drift_resolved') {\n      message = `Configuração de ${component} voltou a corresponder ao baseline. Nenhuma alteração automática foi feita pelo Guardian.`;\n    } else if (emit === 'security_configuration_drift') {\n      message = `Detectei uma mudança de configuração de segurança no OMEAB (${component}). Nenhuma configuração foi modificada automaticamente.`;\n    } else if (emit === 'runtime_configuration_drift') {\n      message = `Detectei drift de configuração em runtime (${component}). Investigar imagem/porta efetiva vs Compose.`;\n    } else {\n      message = `Detectei uma mudança de configuração no OMEAB (${component}). Nenhuma configuração foi modificada automaticamente.`;\n    }\n    events.push({\n      source: 'configuration_drift_guardian',\n      severity: emit === 'configuration_drift_resolved' ? 'info' : severity,\n      component: 'configuration',\n      event: emit,\n      status: emit === 'configuration_drift_resolved' ? 'recovered' : (risk === 'critical' || risk === 'high' ? 'degraded' : 'attention'),\n      timestamp: now,\n      message,\n      details: {\n        monitored_component: component,\n        change_type: item.change_type,\n        before_summary: item.before_summary,\n        after_summary: item.after_summary,\n        risk,\n        recommendation: item.recommendation,\n        fingerprint_before: fpBefore,\n        fingerprint_after: fpAfter,\n        advisory_only: true,\n        auto_repair: false,\n      },\n      requires_attention: emit !== 'configuration_drift_resolved',\n      suggested_action: item.recommendation || 'review_change',\n    });\n  }\n}\n\nreturn [{\n  json: {\n    skip_persist: false,\n    should_emit: events.length > 0,\n    overall_status: driftResp.overall_status,\n    summary: driftResp.summary,\n    partial: driftResp.partial || [],\n    snapshot_execution_time_ms: driftResp.snapshot_execution_time_ms,\n    persist_rows,\n    events,\n    meta: {\n      last_overall_status: driftResp.overall_status,\n      last_summary: driftResp.summary || {},\n    },\n  },\n}];\n",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        760,
+        80
+      ],
+      "name": "Evaluate Dedup Persist Plan"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{\n(() => {\n  if ($json.skip_persist) return 'SELECT 1 AS skipped;';\n  const esc = (v) => String(v ?? '').replace(/'/g, \"''\");\n  const rows = $json.persist_rows || [];\n  if (!rows.length) return 'SELECT 1 AS no_rows;';\n  const parts = rows.map((r) => {\n    const details = JSON.stringify(r.details || {}).replace(/'/g, \"''\");\n    const fs = r.first_seen_at ? `'${esc(r.first_seen_at)}'::timestamptz` : 'NULL';\n    const rs = r.resolved_at ? `'${esc(r.resolved_at)}'::timestamptz` : 'NULL';\n    return `INSERT INTO configuration_drift_state (\n      component, baseline_fingerprint, current_fingerprint, drift_type, risk, status,\n      first_seen_at, last_seen_at, resolved_at, details\n    ) VALUES (\n      '${esc(r.component)}',\n      ${r.baseline_fingerprint ? `'${esc(r.baseline_fingerprint)}'` : 'NULL'},\n      ${r.current_fingerprint ? `'${esc(r.current_fingerprint)}'` : 'NULL'},\n      ${r.drift_type ? `'${esc(r.drift_type)}'` : 'NULL'},\n      ${r.risk ? `'${esc(r.risk)}'` : 'NULL'},\n      '${esc(r.status)}',\n      ${fs},\n      '${esc(r.last_seen_at)}'::timestamptz,\n      ${rs},\n      '${details}'::jsonb\n    )\n    ON CONFLICT (component) DO UPDATE SET\n      baseline_fingerprint = EXCLUDED.baseline_fingerprint,\n      current_fingerprint = EXCLUDED.current_fingerprint,\n      drift_type = EXCLUDED.drift_type,\n      risk = EXCLUDED.risk,\n      status = EXCLUDED.status,\n      first_seen_at = COALESCE(configuration_drift_state.first_seen_at, EXCLUDED.first_seen_at),\n      last_seen_at = EXCLUDED.last_seen_at,\n      resolved_at = EXCLUDED.resolved_at,\n      details = EXCLUDED.details`;\n  });\n  return parts.join(';\\n') + ';';\n})()\n}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1000,
+        0
+      ],
+      "name": "Persist Component States",
+      "credentials": {
+        "postgres": {
+          "id": "{{CREDENTIAL_ID}}",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{\n(() => {\n  if ($json.skip_persist) return 'SELECT 1 AS skipped_meta;';\n  const esc = (v) => String(v ?? '').replace(/'/g, \"''\");\n  const m = $json.meta || {};\n  const summary = JSON.stringify(m.last_summary || {}).replace(/'/g, \"''\");\n  return `UPDATE configuration_drift_meta SET\n    last_overall_status = '${esc(m.last_overall_status)}',\n    last_summary = '${summary}'::jsonb,\n    last_check_at = now(),\n    updated_at = now()\n  WHERE id = 1;`;\n})()\n}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1000,
+        160
+      ],
+      "name": "Upsert Meta",
+      "credentials": {
+        "postgres": {
+          "id": "{{CREDENTIAL_ID}}",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst root = $input.first().json || {};\nconst events = Array.isArray(root.events) ? root.events : [];\nif (!events.length) {\n  return [{ json: { should_emit: false } }];\n}\nreturn events.map((e) => ({ json: { should_emit: true, ...e } }));\n",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        320
+      ],
+      "name": "Expand Events"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "emit",
+              "leftValue": "={{ $json.should_emit }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1240,
+        320
+      ],
+      "name": "Should Notify?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "{{$env.N8N_WEBHOOK_BASE}}/webhook/hestia-event",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ source: $json.source, severity: $json.severity, component: $json.component, event: $json.event, status: $json.status, timestamp: $json.timestamp, message: $json.message, details: $json.details, requires_attention: $json.requires_attention, suggested_action: $json.suggested_action }) }}",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1480,
+        300
+      ],
+      "name": "Send to Hestia Event Bus",
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    }
+  ],
+  "connections": {
+    "Every 15 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Get Configuration Drift",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Previous States",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get Configuration Drift",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Previous States",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Configuration Drift": {
+      "main": [
+        [
+          {
+            "node": "Wait Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Previous States": {
+      "main": [
+        [
+          {
+            "node": "Wait Context",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Wait Context": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Dedup Persist Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Dedup Persist Plan": {
+      "main": [
+        [
+          {
+            "node": "Persist Component States",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Upsert Meta",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Expand Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Expand Events": {
+      "main": [
+        [
+          {
+            "node": "Should Notify?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Notify?": {
+      "main": [
+        [
+          {
+            "node": "Send to Hestia Event Bus",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "meta": {
+    "templateSource": "VinyLab-Automation-Hub",
+    "sanitized": true
+  },
+  "pinData": {},
+  "active": false
+}

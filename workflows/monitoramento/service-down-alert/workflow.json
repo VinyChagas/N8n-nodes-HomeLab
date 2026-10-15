@@ -1,0 +1,219 @@
+{
+  "name": "03 - SERVICE DOWN ALERT",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "service-status",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "name": "Webhook",
+      "webhookId": "{{WEBHOOK_ID}}"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $json.body ?? $json;\n\nconst heartbeat = input.heartbeat ?? {};\nconst monitor = input.monitor ?? {};\nconst rawStatus = heartbeat.status;\n\nconst statusMap = {\n  0: 'down',\n  1: 'up',\n  2: 'pending',\n  3: 'maintenance',\n};\n\nconst normalizedStatus = statusMap[rawStatus] ?? 'unknown';\n\nconst tagNames = Array.isArray(monitor.tags)\n  ? monitor.tags\n      .map(tag => String(tag.name ?? tag.value ?? '').toUpperCase())\n      .filter(Boolean)\n  : [];\n\nlet severity = 'warning';\n\nif (tagNames.includes('CRITICAL')) {\n  severity = 'critical';\n} else if (tagNames.includes('ERROR')) {\n  severity = 'error';\n} else if (tagNames.includes('WARNING')) {\n  severity = 'warning';\n}\n\nlet event = 'service_status_unknown';\nlet eventStatus = 'active';\nlet requiresAttention = false;\n\nif (normalizedStatus === 'down') {\n  event = 'service_down';\n  eventStatus = 'active';\n  requiresAttention = true;\n}\n\nif (normalizedStatus === 'up') {\n  event = 'service_recovered';\n  eventStatus = 'healthy';\n  requiresAttention = false;\n}\n\nif (normalizedStatus === 'pending') {\n  event = 'service_pending';\n  eventStatus = 'pending';\n}\n\nif (normalizedStatus === 'maintenance') {\n  event = 'service_maintenance';\n  eventStatus = 'maintenance';\n}\n\nconst monitorName = monitor.name ?? 'Unknown Service';\n\nconst heartbeatMessage = heartbeat.msg ?? null;\n\nlet normalizedMessage;\n\nif (normalizedStatus === 'down') {\n  normalizedMessage = heartbeatMessage\n    ? `${monitorName} está indisponível. Motivo: ${heartbeatMessage}`\n    : `${monitorName} está indisponível.`;\n} else if (normalizedStatus === 'up') {\n  normalizedMessage = `${monitorName} voltou a responder normalmente.${heartbeatMessage ? ` Resposta: ${heartbeatMessage}` : ''}`;\n} else if (normalizedStatus === 'pending') {\n  normalizedMessage = `${monitorName} está em estado de verificação.`;\n} else if (normalizedStatus === 'maintenance') {\n  normalizedMessage = `${monitorName} está em manutenção.`;\n} else {\n  normalizedMessage = input.msg ?? `${monitorName} mudou para ${normalizedStatus}.`;\n}\n\nreturn [{\n  json: {\n    source: 'uptime_kuma',\n    severity,\n    component: 'service_monitoring',\n    event,\n    status: eventStatus,\n    timestamp: heartbeat.time ?? new Date().toISOString(),\n\n    message: normalizedMessage,\n\n    details: {\n      monitor_id: monitor.id ?? heartbeat.monitorID ?? null,\n      monitor_name: monitorName,\n      monitor_type: monitor.type ?? null,\n      kuma_status: normalizedStatus,\n      kuma_status_code: rawStatus ?? null,\n      ping_ms: heartbeat.ping ?? null,\n      duration: heartbeat.duration ?? null,\n      retries: heartbeat.retries ?? null,\n      important: heartbeat.important ?? null,\n      tags: tagNames,\n    },\n\n    requires_attention: requiresAttention,\n\n    suggested_action:\n      normalizedStatus === 'down'\n        ? `Verificar o serviço ${monitorName}, seus logs e dependências no OMEAB.`\n        : normalizedStatus === 'up'\n          ? `Nenhuma ação imediata necessária. O serviço ${monitorName} voltou a responder normalmente.`\n          : null,\n\n    service: {\n      id: monitor.id ?? heartbeat.monitorID ?? null,\n      name: monitorName,\n      type: monitor.type ?? null,\n      status: normalizedStatus,\n      ping_ms: heartbeat.ping ?? null,\n    },\n\n    raw: {\n      heartbeat_msg: heartbeat.msg ?? null,\n      kuma_msg: input.msg ?? null,\n    },\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        0
+      ],
+      "name": "Normalize Service Event"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    e.event AS previous_event,\n    e.severity AS previous_severity,\n    e.status AS previous_status,\n    e.timestamp AS previous_timestamp,\n    e.message AS previous_message,\n    e.created_at AS previous_created_at\nFROM (SELECT 1) AS dummy\nLEFT JOIN LATERAL (\n    SELECT\n        event,\n        severity,\n        status,\n        timestamp,\n        message,\n        created_at\n    FROM hestia_events\n    WHERE source = 'uptime_kuma'\n      AND component = 'service_monitoring'\n      AND details->>'monitor_id' = '{{ $json.details.monitor_id }}'\n    ORDER BY created_at DESC\n    LIMIT 1\n) e ON TRUE;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        416,
+        160
+      ],
+      "name": "Get Previous Service State",
+      "credentials": {
+        "postgres": {
+          "id": "{{CREDENTIAL_ID}}",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        624,
+        16
+      ],
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $json;\n\nconst previousEvent = data.previous_event ?? null;\nconst previousSeverity = data.previous_severity ?? null;\nconst previousStatus = data.previous_status ?? null;\n\nconst currentEvent = data.event;\nconst currentSeverity = data.severity;\nconst currentStatus = data.status;\n\nlet shouldNotify = false;\nlet reason = 'no_change';\n\n// 1. Primeiro DOWN conhecido desse serviço\nif (\n  currentEvent === 'service_down' &&\n  previousEvent === null\n) {\n  shouldNotify = true;\n  reason = 'first_incident';\n}\n\n// 2. Serviço recuperou\nelse if (\n  currentEvent === 'service_recovered' &&\n  previousEvent !== null &&\n  previousStatus !== 'healthy'\n) {\n  shouldNotify = true;\n  reason = 'recovered';\n}\n\n// 3. O tipo do incidente mudou\nelse if (\n  currentEvent === 'service_down' &&\n  previousEvent !== null &&\n  currentEvent !== previousEvent\n) {\n  shouldNotify = true;\n  reason = 'incident_changed';\n}\n\n// 4. Mesmo incidente, mas severidade aumentou\nelse if (\n  currentEvent === 'service_down' &&\n  previousEvent !== null &&\n  currentEvent === previousEvent\n) {\n  const severityRank = {\n    info: 1,\n    warning: 2,\n    error: 3,\n    critical: 4,\n  };\n\n  const currentRank = severityRank[currentSeverity] ?? 0;\n  const previousRank = severityRank[previousSeverity] ?? 0;\n\n  if (currentRank > previousRank) {\n    shouldNotify = true;\n    reason = 'severity_escalated';\n  }\n}\n\nreturn [\n  {\n    json: {\n      ...data,\n\n      notification: {\n        should_notify: shouldNotify,\n        reason,\n\n        previous_event: previousEvent,\n        previous_severity: previousSeverity,\n        previous_status: previousStatus,\n\n        current_event: currentEvent,\n        current_severity: currentSeverity,\n        current_status: currentStatus,\n      },\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        832,
+        16
+      ],
+      "name": "Decide Service Notification"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "{{$env.N8N_WEBHOOK_BASE}}/webhook/hestia-event",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{\n{\n  source: $json.source,\n  severity: $json.severity,\n  component: $json.component,\n  event: $json.event,\n  status: $json.status,\n  timestamp: $json.timestamp,\n  message: $json.message,\n  details: {\n    ...$json.details,\n    notification_reason: $json.notification?.reason ?? null\n  },\n  requires_attention: $json.requires_attention,\n  suggested_action: $json.suggested_action\n}\n}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1248,
+        -80
+      ],
+      "name": "Send to Hestia Event Bus"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "e6325c00-b1d3-4e58-84ef-05fce132d42a",
+              "leftValue": "={{ $json.notification.should_notify }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1040,
+        16
+      ],
+      "name": "Should Notify?"
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize Service Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Service Event": {
+      "main": [
+        [
+          {
+            "node": "Get Previous Service State",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Previous Service State": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Decide Service Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decide Service Notification": {
+      "main": [
+        [
+          {
+            "node": "Should Notify?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Notify?": {
+      "main": [
+        [
+          {
+            "node": "Send to Hestia Event Bus",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "meta": {
+    "templateSource": "VinyLab-Automation-Hub",
+    "sanitized": true
+  },
+  "pinData": {},
+  "active": false
+}

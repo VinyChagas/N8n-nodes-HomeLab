@@ -1,0 +1,292 @@
+{
+  "name": "11 - MEDIA AUTOMATION",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 10
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ],
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "{{$env.OMEAB_SERVICE_URL}}/scan",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.MEDIA_AUTOMATION_TOKEN }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        240,
+        0
+      ],
+      "name": "Scan Media Inbox",
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "{{$env.OMEAB_SERVICE_URL}}/process-queue",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.MEDIA_AUTOMATION_TOKEN }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        480,
+        0
+      ],
+      "name": "Process Queue",
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "{{$env.OMEAB_SERVICE_URL}}/events/pending",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.MEDIA_AUTOMATION_TOKEN }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        720,
+        0
+      ],
+      "name": "Get Pending Events",
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const scan = $('Scan Media Inbox').first().json || {};\nconst queue = $('Process Queue').first().json || {};\nconst pending = $json || {};\nconst now = new Date().toISOString();\nconst items = [];\n\nconst events = Array.isArray(pending.events) ? pending.events : [];\nfor (const ev of events) {\n  items.push({\n    json: {\n      should_emit: true,\n      source: ev.source || 'media_automation',\n      severity: ev.severity || 'info',\n      component: ev.component || 'media',\n      event: ev.event,\n      status: ev.status,\n      timestamp: now,\n      message: ev.message,\n      requires_attention: !!ev.requires_attention,\n      suggested_action: ev.suggested_action ?? null,\n      details: {\n        item_id: ev.details?.item_id ?? null,\n        media_type: ev.details?.media_type ?? null,\n        filename: ev.details?.filename ?? null,\n        title: ev.details?.title ?? null,\n        year: ev.details?.year ?? null,\n        series: ev.details?.series ?? null,\n        season: ev.details?.season ?? null,\n        episode: ev.details?.episode ?? null,\n        artist: ev.details?.artist ?? null,\n        album: ev.details?.album ?? null,\n        destination: ev.details?.destination ?? null,\n        confidence: ev.details?.confidence ?? null,\n        review_reason: ev.details?.review_reason ?? null,\n        error_code: ev.details?.error_code ?? null,\n      },\n      ack: { item_id: ev.item_id, event_key: ev.event_key },\n      scan_summary: {\n        scanned: scan.scanned ?? 0,\n        registered: scan.registered ?? 0,\n        skipped: scan.skipped ?? 0,\n        waiting: scan.waiting ?? 0,\n        queue_started: !!queue.started,\n        queue_item_id: queue.item_id ?? null,\n        scan_time_ms: scan.scan_time_ms ?? null,\n      },\n    },\n  });\n}\n\nif (!items.length) {\n  items.push({\n    json: {\n      should_emit: false,\n      scan_summary: {\n        scanned: scan.scanned ?? 0,\n        registered: scan.registered ?? 0,\n        skipped: scan.skipped ?? 0,\n        waiting: scan.waiting ?? 0,\n        queue_started: !!queue.started,\n      },\n    },\n  });\n}\n\nreturn items;\n",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        0
+      ],
+      "name": "Prepare Media Events"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.should_emit }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1200,
+        0
+      ],
+      "name": "Has Events?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "{{$env.N8N_WEBHOOK_BASE}}/webhook/hestia-event",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{\n{\n  source: $json.source,\n  severity: $json.severity,\n  component: $json.component,\n  event: $json.event,\n  status: $json.status,\n  timestamp: $json.timestamp,\n  message: $json.message,\n  details: $json.details,\n  requires_attention: $json.requires_attention,\n  suggested_action: $json.suggested_action\n}\n}}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1440,
+        -80
+      ],
+      "name": "Hestia Event Bus",
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "{{$env.OMEAB_SERVICE_URL}}/events/ack",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.MEDIA_AUTOMATION_TOKEN }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { acks: [$json.ack] } }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1680,
+        -80
+      ],
+      "name": "Ack Events",
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Scan Media Inbox",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scan Media Inbox": {
+      "main": [
+        [
+          {
+            "node": "Process Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Queue": {
+      "main": [
+        [
+          {
+            "node": "Get Pending Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Pending Events": {
+      "main": [
+        [
+          {
+            "node": "Prepare Media Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Media Events": {
+      "main": [
+        [
+          {
+            "node": "Has Events?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Events?": {
+      "main": [
+        [
+          {
+            "node": "Hestia Event Bus",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Hestia Event Bus": {
+      "main": [
+        [
+          {
+            "node": "Ack Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "timezone": "America/Sao_Paulo"
+  },
+  "meta": {
+    "templateSource": "VinyLab-Automation-Hub",
+    "sanitized": true
+  },
+  "pinData": {},
+  "active": false
+}

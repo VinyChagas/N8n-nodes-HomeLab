@@ -1,0 +1,257 @@
+{
+  "name": "04 - DOCKER GUARDIAN",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 2
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ],
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "url": "{{$env.SERVICE_BASE_URL}}/v1/docker",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.OMEAB_HEALTH_TOKEN }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        220,
+        0
+      ],
+      "name": "Get Docker Health"
+    },
+    {
+      "parameters": {
+        "jsCode": "const payload = $json;\nconst containers = Array.isArray(payload.containers) ? payload.containers : [];\nconst timestamp = payload.timestamp ?? new Date().toISOString();\nconst summary = payload.summary ?? {};\n\nconst items = [];\n\nfor (const c of containers) {\n  if (c?.expected !== true) {\n    continue;\n  }\n\n  const name = String(c.name ?? '').trim();\n  if (!name) {\n    continue;\n  }\n\n  const state = String(c.state ?? 'unknown').toLowerCase();\n  const health = c.health == null ? null : String(c.health).toLowerCase();\n  const criticality = String(c.criticality ?? 'warning').toLowerCase();\n  const restartCount = Number(c.restart_count ?? 0);\n  const image = c.image ?? '';\n  const missing = c.missing === true;\n\n  let severity = 'info';\n  let event = 'docker_healthy';\n  let status = 'healthy';\n  let shouldEmit = false;\n  let requiresAttention = false;\n  let message = `Container ${name} está operando normalmente.`;\n  let suggestedAction = null;\n\n  const severityFromCriticality = (() => {\n    if (criticality === 'critical') return 'critical';\n    if (criticality === 'error') return 'error';\n    return 'warning';\n  })();\n\n  // Incident priority: dead > restarting > stopped/missing > unhealthy\n  if (state === 'dead') {\n    event = 'container_dead';\n    status = 'active';\n    severity = severityFromCriticality;\n    shouldEmit = true;\n    requiresAttention = true;\n    message = `Container ${name} está marcado como dead pelo Docker.`;\n    suggestedAction =\n      `Investigar logs do container ${name} (docker logs ${name}) e a causa da falha. ` +\n      'Não reiniciar automaticamente — Viny autoriza ações.';\n  } else if (state === 'restarting') {\n    event = 'container_restarting';\n    status = 'degraded';\n    severity = severityFromCriticality;\n    shouldEmit = true;\n    requiresAttention = true;\n    message = `Container ${name} está em estado restarting (possível restart loop).`;\n    suggestedAction =\n      `Verificar logs e healthcheck de ${name}. Evitar restart em loop; investigar a causa raiz.`;\n  } else if (missing || state === 'exited' || state === 'created' || state === 'paused') {\n    event = 'container_stopped';\n    status = 'active';\n    severity = severityFromCriticality;\n    shouldEmit = true;\n    requiresAttention = true;\n    message = missing\n      ? `Container esperado ${name} não foi encontrado no Docker.`\n      : `Container esperado ${name} não está em execução (state=${state}).`;\n    suggestedAction =\n      `Verificar se a parada de ${name} foi intencional. ` +\n      'Consultar logs e dependências antes de qualquer remediação manual.';\n  } else if (health === 'unhealthy') {\n    event = 'container_unhealthy';\n    status = 'degraded';\n    severity = severityFromCriticality;\n    shouldEmit = true;\n    requiresAttention = true;\n    message = `Container ${name} está running, mas o Docker healthcheck reportou unhealthy.`;\n    suggestedAction =\n      `Inspecionar healthcheck e logs de ${name}. Não reiniciar automaticamente.`;\n  } else if (state === 'running' && (health === null || health === 'healthy' || health === 'starting')) {\n    event = 'docker_healthy';\n    status = 'healthy';\n    severity = 'info';\n    shouldEmit = false;\n    requiresAttention = false;\n    message =\n      health === 'starting'\n        ? `Container ${name} está running com healthcheck em starting.`\n        : `Container ${name} está operando normalmente.`;\n    suggestedAction = null;\n  } else {\n    // Estado inesperado\n    event = 'container_stopped';\n    status = 'active';\n    severity = severityFromCriticality;\n    shouldEmit = true;\n    requiresAttention = true;\n    message = `Container ${name} em estado inesperado: state=${state}, health=${health}.`;\n    suggestedAction = `Investigar o estado do container ${name} no Docker (somente leitura).`;\n  }\n\n  items.push({\n    json: {\n      should_emit: shouldEmit,\n      source: 'docker_guardian',\n      severity,\n      component: 'docker',\n      event,\n      status,\n      timestamp,\n      message,\n      details: {\n        container_name: name,\n        container_state: state,\n        container_health: health,\n        image,\n        restart_count: restartCount,\n        restart_policy: c.restart_policy ?? null,\n        project: c.project ?? null,\n        service: c.service ?? null,\n        criticality,\n        has_healthcheck: c.has_healthcheck === true,\n        missing,\n        summary,\n        previous_state: null,\n        previous_health: null,\n        notification_reason: null,\n      },\n      requires_attention: requiresAttention,\n      suggested_action: suggestedAction,\n    },\n  });\n}\n\nreturn items;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ],
+      "name": "Evaluate Docker"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    e.event AS previous_event,\n    e.severity AS previous_severity,\n    e.status AS previous_status,\n    e.timestamp AS previous_timestamp,\n    e.message AS previous_message,\n    e.created_at AS previous_created_at,\n    e.details AS previous_details\nFROM (SELECT 1) AS dummy\nLEFT JOIN LATERAL (\n    SELECT\n        event,\n        severity,\n        status,\n        timestamp,\n        message,\n        created_at,\n        details\n    FROM hestia_events\n    WHERE source = 'docker_guardian'\n      AND component = 'docker'\n      AND details->>'container_name' = '{{ $json.details.container_name }}'\n    ORDER BY created_at DESC\n    LIMIT 1\n) e ON TRUE;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        680,
+        160
+      ],
+      "name": "Get Previous Docker State",
+      "credentials": {
+        "postgres": {
+          "id": "{{CREDENTIAL_ID}}",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        900,
+        0
+      ],
+      "name": "Merge Docker State"
+    },
+    {
+      "parameters": {
+        "jsCode": "const allItems = $input.all();\nconst results = [];\n\nfor (const item of allItems) {\n  const data = item.json;\n\n  const previousEvent = data.previous_event ?? null;\n  const previousSeverity = data.previous_severity ?? null;\n  const previousStatus = data.previous_status ?? null;\n\n  let previousDetails = data.previous_details ?? null;\n  if (typeof previousDetails === 'string') {\n    try {\n      previousDetails = JSON.parse(previousDetails);\n    } catch (e) {\n      previousDetails = null;\n    }\n  }\n\n  const previousState = previousDetails?.container_state ?? null;\n  const previousHealth = previousDetails?.container_health ?? null;\n  const previousRestartCount =\n    previousDetails?.restart_count === undefined || previousDetails?.restart_count === null\n      ? null\n      : Number(previousDetails.restart_count);\n\n  const currentRestartCount = Number(data.details?.restart_count ?? 0);\n\n  const details = {\n    ...(data.details ?? {}),\n    previous_state: previousState,\n    previous_health: previousHealth,\n  };\n\n  let shouldNotify = false;\n  let reason = 'no_change';\n  let out = null;\n\n  // 1. PRIMEIRO INCIDENTE\n  if (previousEvent === null && data.should_emit === true) {\n    shouldNotify = true;\n    reason = 'first_incident';\n  }\n\n  // 2. RECUPERAÇÃO\n  else if (\n    data.event === 'docker_healthy' &&\n    previousEvent !== null &&\n    previousStatus !== 'healthy'\n  ) {\n    const name = details.container_name ?? 'container';\n    out = {\n      ...data,\n      should_emit: true,\n      severity: 'info',\n      event: 'container_recovered',\n      status: 'healthy',\n      message:\n        `Container ${name} voltou a operar normalmente. ` +\n        `Incidente anterior: ${previousEvent}.`,\n      requires_attention: false,\n      suggested_action:\n        'Nenhuma ação imediata necessária. Continuar monitorando a estabilidade do container.',\n      details: {\n        ...details,\n        notification_reason: 'recovered',\n      },\n      notification: {\n        should_notify: true,\n        reason: 'recovered',\n        previous_event: previousEvent,\n        previous_severity: previousSeverity,\n        previous_status: previousStatus,\n      },\n    };\n  }\n\n  // 3. AUMENTO DE RESTART_COUNT (sem outro incidente ativo)\n  else if (\n    data.should_emit !== true &&\n    data.event === 'docker_healthy' &&\n    previousRestartCount !== null &&\n    Number.isFinite(previousRestartCount) &&\n    currentRestartCount > previousRestartCount\n  ) {\n    const name = details.container_name ?? 'container';\n    const criticality = details.criticality ?? 'warning';\n    const severity =\n      criticality === 'critical' ? 'critical' : criticality === 'error' ? 'error' : 'warning';\n\n    out = {\n      ...data,\n      should_emit: true,\n      severity,\n      event: 'restart_count_increased',\n      status: 'degraded',\n      message:\n        `Container ${name} teve aumento de restart_count ` +\n        `(${previousRestartCount} → ${currentRestartCount}).`,\n      requires_attention: true,\n      suggested_action:\n        `Investigar por que ${name} reiniciou. Conferir logs e política de restart — sem remediação automática.`,\n      details: {\n        ...details,\n        notification_reason: 'first_incident',\n      },\n      notification: {\n        should_notify: true,\n        reason: previousEvent === 'restart_count_increased' ? 'incident_changed' : 'first_incident',\n        previous_event: previousEvent,\n        previous_severity: previousSeverity,\n        previous_status: previousStatus,\n      },\n    };\n  }\n\n  // 4. MUDANÇA DO TIPO DE INCIDENTE\n  else if (\n    data.should_emit === true &&\n    previousEvent !== null &&\n    data.event !== previousEvent\n  ) {\n    shouldNotify = true;\n    reason = 'incident_changed';\n  }\n\n  // 5. ESCALADA DE SEVERIDADE\n  else if (\n    data.should_emit === true &&\n    previousEvent !== null &&\n    data.event === previousEvent\n  ) {\n    const severityRank = {\n      info: 1,\n      warning: 2,\n      error: 3,\n      critical: 4,\n    };\n\n    const currentRank = severityRank[data.severity] ?? 0;\n    const previousRank = severityRank[previousSeverity] ?? 0;\n\n    if (currentRank > previousRank) {\n      shouldNotify = true;\n      reason = 'severity_escalated';\n    }\n  }\n\n  if (out === null) {\n    details.notification_reason = reason;\n    out = {\n      ...data,\n      details,\n      notification: {\n        should_notify: shouldNotify,\n        reason,\n        previous_event: previousEvent,\n        previous_severity: previousSeverity,\n        previous_status: previousStatus,\n      },\n    };\n  }\n\n  results.push({ json: out });\n}\n\nreturn results;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        0
+      ],
+      "name": "Decide Docker Notification"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "edd12ca9-d24a-46eb-aa85-804541afdb78",
+              "leftValue": "={{ $json.notification.should_notify }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1340,
+        0
+      ],
+      "name": "Should Notify?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "{{$env.N8N_WEBHOOK_BASE}}/webhook/hestia-event",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{\n{\n  source: $json.source,\n  severity: $json.severity,\n  component: $json.component,\n  event: $json.event,\n  status: $json.status,\n  timestamp: $json.timestamp,\n  message: $json.message,\n  details: {\n    ...$json.details,\n    notification_reason: $json.notification?.reason ?? $json.details?.notification_reason ?? null\n  },\n  requires_attention: $json.requires_attention,\n  suggested_action: $json.suggested_action\n}\n}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1560,
+        -120
+      ],
+      "name": "Send to Hestia Event Bus"
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get Docker Health",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Docker Health": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Docker",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Docker": {
+      "main": [
+        [
+          {
+            "node": "Get Previous Docker State",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge Docker State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Previous Docker State": {
+      "main": [
+        [
+          {
+            "node": "Merge Docker State",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Docker State": {
+      "main": [
+        [
+          {
+            "node": "Decide Docker Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decide Docker Notification": {
+      "main": [
+        [
+          {
+            "node": "Should Notify?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Notify?": {
+      "main": [
+        [
+          {
+            "node": "Send to Hestia Event Bus",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "meta": {
+    "templateSource": "VinyLab-Automation-Hub",
+    "sanitized": true
+  },
+  "pinData": {},
+  "active": false
+}

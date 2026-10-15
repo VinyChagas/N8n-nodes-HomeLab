@@ -1,0 +1,20 @@
+# Secrets & private exports
+.env
+.env.*
+!.env.example
+.secrets/
+**/private/
+**/*decrypted*
+**/*credential*
+**/raw-exports/
+VinyLab-Automation-Hub-PRIVATE/
+
+# n8n runtime artifacts
+*.log
+node_modules/
+.DS_Store
+
+# Local analysis caches
+analysis-full.json
+inventory.json
+metrics.json

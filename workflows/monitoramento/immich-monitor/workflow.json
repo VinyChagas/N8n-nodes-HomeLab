@@ -1,0 +1,470 @@
+{
+  "name": "12 - IMMICH MONITOR",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 10
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ],
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.IMMICH_URL }}/api/jobs",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.IMMICH_MONITOR_TOKEN }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        220,
+        0
+      ],
+      "name": "Get Immich Jobs",
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.IMMICH_URL }}/api/server/statistics",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.IMMICH_MONITOR_TOKEN }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        440,
+        0
+      ],
+      "name": "Get Immich Server Statistics",
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.IMMICH_URL }}/api/assets/statistics",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.IMMICH_MONITOR_TOKEN }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        660,
+        0
+      ],
+      "name": "Get Immich Asset Statistics",
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.IMMICH_URL }}/api/server/storage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.IMMICH_MONITOR_TOKEN }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        880,
+        0
+      ],
+      "name": "Get Immich Storage",
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.IMMICH_URL }}/api/server/about",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.IMMICH_MONITOR_TOKEN }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1100,
+        0
+      ],
+      "name": "Get Immich About",
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "http://immich_machine_learning:3003/ping",
+        "sendHeaders": false,
+        "headerParameters": {
+          "parameters": []
+        },
+        "options": {
+          "timeout": 5000,
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1320,
+        0
+      ],
+      "name": "Get Immich ML Ping",
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst testMode = String($env.IMMICH_MONITOR_TEST_MODE || 'false').toLowerCase() === 'true';\nconst now = new Date().toISOString();\n\nfunction safeJson(nodeName) {\n  try {\n    const n = $(nodeName).first().json;\n    return n && typeof n === 'object' ? n : {};\n  } catch (e) {\n    return { _error: true, _message: String(e?.message || e) };\n  }\n}\n\nfunction safeText(nodeName) {\n  try {\n    const item = $(nodeName).first();\n    if (item.json && typeof item.json === 'object' && item.json.data !== undefined) return String(item.json.data);\n    // http node may put body as string in json when not parsed\n    const j = item.json;\n    if (typeof j === 'string') return j;\n    if (j && j.res) return String(j.res);\n    return JSON.stringify(j);\n  } catch (e) {\n    return '';\n  }\n}\n\nconst jobsRaw = safeJson('Get Immich Jobs');\nconst serverStats = safeJson('Get Immich Server Statistics');\nconst assetStats = safeJson('Get Immich Asset Statistics');\nconst storage = safeJson('Get Immich Storage');\nconst about = safeJson('Get Immich About');\nlet mlBody = '';\ntry {\n  const ml = $('Get Immich ML Ping').first().json;\n  if (typeof ml === 'string') mlBody = ml;\n  else if (ml && typeof ml.data === 'string') mlBody = ml.data;\n  else if (ml && ml.res) mlBody = String(ml.res);\n  else mlBody = JSON.stringify(ml || '');\n} catch (e) {\n  mlBody = '';\n}\n\nconst partial = !!(jobsRaw._error || serverStats._error || assetStats._error);\n\n// Aggregate jobs — never include asset IDs / personal data\nconst jobSnapshot = {};\nconst failedSnapshot = {};\nlet backlogTotal = 0;\nlet failedTotal = 0;\nconst jobNames = [];\n\nif (!jobsRaw._error) {\n  for (const [name, info] of Object.entries(jobsRaw)) {\n    if (!info || typeof info !== 'object') continue;\n    const jc = info.jobCounts || {};\n    const active = Number(jc.active || 0);\n    const waiting = Number(jc.waiting || 0);\n    const delayed = Number(jc.delayed || 0);\n    const failed = Number(jc.failed || 0);\n    const completed = Number(jc.completed || 0);\n    const paused = Number(jc.paused || 0);\n    jobSnapshot[name] = { active, waiting, delayed, failed, completed, paused, isActive: !!info.queueStatus?.isActive, isPaused: !!info.queueStatus?.isPaused };\n    failedSnapshot[name] = failed;\n    backlogTotal += active + waiting + delayed;\n    failedTotal += failed;\n    jobNames.push(name);\n  }\n}\n\nconst photos = Number(assetStats.images ?? serverStats.photos ?? 0);\nconst videos = Number(assetStats.videos ?? serverStats.videos ?? 0);\nconst assetCount = Number(assetStats.total ?? (photos + videos));\n\n// Storage accessibility: Immich API returned disk fields\nconst storageAccessible = !storage._error && storage.diskSizeRaw != null;\n\n// ML: ping text\nlet mlStatus = 'unknown';\nconst mlText = (mlBody || '').toLowerCase();\nif (mlText.includes('pong')) mlStatus = 'ok';\nelse if (mlText.includes('error') || mlText === '' || mlText.includes('econn') || mlText.includes('timed')) mlStatus = 'unavailable';\n\nconst BACKLOG_THRESHOLD = 50;\nconst CONFIRMATIONS = 3;\n\nlet snapshot = {\n  status: 'healthy',\n  partial,\n  test: false,\n  server: {\n    version: about.version || null,\n    buildImage: about.buildImage || null,\n  },\n  assets: {\n    total: assetCount,\n    photos,\n    videos,\n    // NÃO incluir usageByUser / nomes\n  },\n  jobs: {\n    names: jobNames,\n    backlog_total: backlogTotal,\n    failed_total: failedTotal,\n    counts: jobSnapshot,\n  },\n  storage: {\n    accessible: storageAccessible,\n    disk_usage_percentage: storage.diskUsagePercentage ?? null,\n    // raw sizes ok (não pessoal)\n  },\n  machine_learning: { status: mlStatus },\n  problems: [],\n  thresholds: {\n    backlog: BACKLOG_THRESHOLD,\n    confirmations: CONFIRMATIONS,\n    failed_delta_warn: 5,\n  },\n  timestamp: now,\n};\n\n// TEST MODE fixtures — não altera Immich\nif (testMode) {\n  const step = Number($env.IMMICH_MONITOR_TEST_STEP || '0');\n  snapshot.test = true;\n  snapshot.server = { version: 'test', buildImage: 'test' };\n  snapshot.assets = { total: 100, photos: 80, videos: 20 };\n  snapshot.storage = { accessible: true, disk_usage_percentage: 1.0 };\n  snapshot.machine_learning = { status: 'ok' };\n  snapshot.jobs = {\n    names: ['thumbnailGeneration', 'metadataExtraction'],\n    backlog_total: 0,\n    failed_total: 0,\n    counts: {\n      thumbnailGeneration: { active: 0, waiting: 0, delayed: 0, failed: 0, completed: 0, paused: 0 },\n      metadataExtraction: { active: 0, waiting: 0, delayed: 0, failed: 0, completed: 0, paused: 0 },\n    },\n  };\n  if (step === 1) {\n    snapshot.jobs.backlog_total = 80;\n    snapshot.jobs.counts.thumbnailGeneration.waiting = 80;\n  } else if (step === 2) {\n    snapshot.jobs.backlog_total = 80;\n    snapshot.jobs.counts.thumbnailGeneration.waiting = 80;\n  } else if (step === 3) {\n    snapshot.jobs.backlog_total = 120;\n    snapshot.jobs.counts.thumbnailGeneration.waiting = 120;\n    snapshot.jobs.failed_total = 12;\n    snapshot.jobs.counts.metadataExtraction.failed = 12;\n  } else if (step === 4) {\n    snapshot.machine_learning.status = 'unavailable';\n  } else {\n    // step 0 / default: healthy\n  }\n  snapshot.status = 'healthy'; // Evaluate ajusta\n}\n\nreturn [{ json: { snapshot, test_mode: testMode } }];\n",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        0
+      ],
+      "name": "Build Snapshot"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT overall_status, asset_count, photos, videos, job_snapshot, failed_snapshot, backlog_total, ml_status, storage_accessible, problems, observation, test_mode, timestamp AS previous_timestamp FROM immich_monitor_state ORDER BY timestamp DESC LIMIT 1;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1760,
+        0
+      ],
+      "name": "Get Previous State",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "{{CREDENTIAL_ID}}",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst snapshotWrap = $('Build Snapshot').first().json || {};\nconst snapshot = snapshotWrap.snapshot || {};\nlet previous = null;\ntry {\n  const rows = $('Get Previous State').all().map((i) => i.json).filter(Boolean);\n  previous = rows.find((r) => r.overall_status != null) || null;\n  // when no rows, postgres may return empty object\n  if (previous && previous.overall_status === undefined && Object.keys(previous).length === 0) previous = null;\n} catch (e) {\n  previous = null;\n}\n\nconst now = snapshot.timestamp || new Date().toISOString();\nconst BACKLOG_THRESHOLD = Number(snapshot.thresholds?.backlog ?? 50);\nconst CONFIRMATIONS = Number(snapshot.thresholds?.confirmations ?? 3);\nconst FAILED_DELTA_WARN = Number(snapshot.thresholds?.failed_delta_warn ?? 5);\n\nconst prevObs = previous?.observation\n  ? (typeof previous.observation === 'string' ? JSON.parse(previous.observation) : previous.observation)\n  : {};\nlet backlogStreak = Number(prevObs.backlog_streak || 0);\nlet stallStreak = Number(prevObs.stall_streak || 0);\nconst prevFingerprint = prevObs.backlog_fingerprint || null;\n\nlet prevFailed = previous?.failed_snapshot || {};\nif (typeof prevFailed === 'string') {\n  try { prevFailed = JSON.parse(prevFailed); } catch (e) { prevFailed = {}; }\n}\n\nconst backlog = Number(snapshot.jobs?.backlog_total || 0);\nconst fingerprint = JSON.stringify(\n  Object.fromEntries(\n    Object.entries(snapshot.jobs?.counts || {}).map(([k, v]) => [k, { a: v.active, w: v.waiting, d: v.delayed }]),\n  ),\n);\n\nconst problems = [];\n\nif (snapshot.storage && snapshot.storage.accessible === false) {\n  problems.push({\n    code: 'storage_unavailable',\n    event: 'immich_storage_unavailable',\n    severity: 'error',\n    message: 'Storage do Immich inacessível via API.',\n  });\n}\n\nif (snapshot.machine_learning?.status === 'unavailable') {\n  problems.push({\n    code: 'ml_unavailable',\n    event: 'immich_ml_unavailable',\n    severity: 'warning',\n    message: 'Immich Machine Learning indisponível (health ping).',\n  });\n}\n\nif (backlog >= BACKLOG_THRESHOLD) backlogStreak += 1;\nelse backlogStreak = 0;\n\nif (backlogStreak >= CONFIRMATIONS) {\n  problems.push({\n    code: 'job_backlog',\n    event: 'immich_job_backlog',\n    severity: 'warning',\n    message: `Backlog de jobs Immich elevado (${backlog}) por ${backlogStreak} observações.`,\n    details: { backlog_total: backlog, streak: backlogStreak, threshold: BACKLOG_THRESHOLD },\n  });\n}\n\nif (backlog >= BACKLOG_THRESHOLD && prevFingerprint && prevFingerprint === fingerprint) stallStreak += 1;\nelse if (backlog >= BACKLOG_THRESHOLD) stallStreak = 1;\nelse stallStreak = 0;\n\nif (stallStreak >= CONFIRMATIONS) {\n  problems.push({\n    code: 'job_stalled',\n    event: 'immich_job_stalled',\n    severity: stallStreak >= CONFIRMATIONS + 2 ? 'error' : 'warning',\n    message: `Fila de jobs Immich aparentemente parada (${stallStreak} observações sem progresso).`,\n    details: { backlog_total: backlog, streak: stallStreak },\n  });\n}\n\nlet failedDelta = 0;\nconst failedNow = snapshot.jobs?.counts || {};\nfor (const [name, counts] of Object.entries(failedNow)) {\n  const cur = Number(counts.failed || 0);\n  const old = Number(prevFailed[name] || 0);\n  if (cur > old) failedDelta += cur - old;\n}\nif (failedDelta >= FAILED_DELTA_WARN) {\n  problems.push({\n    code: 'job_failures_increased',\n    event: 'immich_job_failures_increased',\n    severity: failedDelta >= 20 ? 'error' : 'warning',\n    message: `Novas falhas de jobs Immich detectadas (+${failedDelta}).`,\n    details: { failed_delta: failedDelta },\n  });\n}\n\nlet overall = 'healthy';\nif (problems.some((p) => p.severity === 'error')) overall = 'degraded';\nelse if (problems.length) overall = 'attention';\n\nsnapshot.status = overall;\nsnapshot.problems = problems.map((p) => ({ code: p.code, event: p.event, severity: p.severity }));\n\nconst observation = {\n  backlog_streak: backlogStreak,\n  stall_streak: stallStreak,\n  backlog_fingerprint: fingerprint,\n  last_failed_totals: Object.fromEntries(\n    Object.entries(failedNow).map(([k, v]) => [k, Number(v.failed || 0)]),\n  ),\n};\n\nlet prevProblems = previous?.problems || [];\nif (typeof prevProblems === 'string') {\n  try { prevProblems = JSON.parse(prevProblems); } catch (e) { prevProblems = []; }\n}\nconst prevCodes = new Set((prevProblems || []).map((p) => p.code || p.event));\n\nfunction severityRank(s) {\n  return ({ info: 0, warning: 1, error: 2, critical: 3 })[s] || 0;\n}\n\nconst events = [];\nfor (const p of problems) {\n  const prevP = (prevProblems || []).find((x) => x.code === p.code);\n  let reason = 'first_incident';\n  let should = true;\n  if (prevP) {\n    if (severityRank(p.severity) > severityRank(prevP.severity || 'info')) reason = 'severity_escalated';\n    else {\n      reason = 'no_change';\n      should = false;\n    }\n  }\n  if (!should) continue;\n  events.push({\n    should_emit: true,\n    source: 'immich_monitor',\n    severity: p.severity,\n    component: 'immich',\n    event: p.event,\n    status: overall,\n    timestamp: now,\n    message: p.message,\n    details: {\n      ...(p.details || {}),\n      overall_status: overall,\n      asset_count: snapshot.assets?.total ?? null,\n      photos: snapshot.assets?.photos ?? null,\n      videos: snapshot.assets?.videos ?? null,\n      backlog_total: backlog,\n      failed_total: snapshot.jobs?.failed_total ?? null,\n      ml_status: snapshot.machine_learning?.status ?? null,\n      storage_accessible: snapshot.storage?.accessible ?? null,\n      notification_reason: reason,\n      test: !!snapshot.test,\n    },\n    requires_attention: true,\n    suggested_action:\n      p.code === 'ml_unavailable'\n        ? 'Verificar container immich_machine_learning (sem restart automático).'\n        : p.code === 'storage_unavailable'\n          ? 'Verificar mounts /srv/storage/fotos/immich.'\n          : 'Observar filas Immich; não cancelar jobs automaticamente.',\n    correlation_id: `immich:${p.code}`,\n  });\n}\n\nif (previous && prevCodes.size > 0 && problems.length === 0) {\n  events.push({\n    should_emit: true,\n    source: 'immich_monitor',\n    severity: 'info',\n    component: 'immich',\n    event: 'immich_recovered',\n    status: 'healthy',\n    timestamp: now,\n    message: 'Immich voltou ao estado funcional saudável.',\n    details: {\n      previous_problem: [...prevCodes].join(','),\n      recovery_time: now,\n      overall_status: 'healthy',\n      test: !!snapshot.test,\n      notification_reason: 'recovered',\n    },\n    requires_attention: false,\n    suggested_action: null,\n    correlation_id: 'immich:recovered',\n  });\n}\n\nconst persist = {\n  overall_status: overall,\n  asset_count: snapshot.assets?.total ?? null,\n  photos: snapshot.assets?.photos ?? null,\n  videos: snapshot.assets?.videos ?? null,\n  job_snapshot: snapshot.jobs?.counts || {},\n  failed_snapshot: Object.fromEntries(\n    Object.entries(snapshot.jobs?.counts || {}).map(([k, v]) => [k, Number(v.failed || 0)]),\n  ),\n  backlog_total: backlog,\n  ml_status: snapshot.machine_learning?.status ?? null,\n  storage_accessible: snapshot.storage?.accessible ?? null,\n  problems: snapshot.problems,\n  observation,\n  test_mode: !!snapshot.test,\n  timestamp: now,\n};\n\nreturn [\n  {\n    json: {\n      should_emit: events.length > 0,\n      events,\n      persist,\n      snapshot_status: overall,\n      events_count: events.length,\n    },\n  },\n];\n",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        0
+      ],
+      "name": "Evaluate Changes"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ `INSERT INTO immich_monitor_state (timestamp, overall_status, asset_count, photos, videos, job_snapshot, failed_snapshot, backlog_total, ml_status, storage_accessible, problems, observation, test_mode) VALUES ('${$json.persist.timestamp}'::timestamptz, '${$json.persist.overall_status}', ${$json.persist.asset_count === null || $json.persist.asset_count === undefined ? 'NULL' : $json.persist.asset_count}, ${$json.persist.photos === null || $json.persist.photos === undefined ? 'NULL' : $json.persist.photos}, ${$json.persist.videos === null || $json.persist.videos === undefined ? 'NULL' : $json.persist.videos}, '${JSON.stringify($json.persist.job_snapshot || {}).replace(/'/g, \"''\")}'::jsonb, '${JSON.stringify($json.persist.failed_snapshot || {}).replace(/'/g, \"''\")}'::jsonb, ${Number($json.persist.backlog_total || 0)}, '${String($json.persist.ml_status || 'unknown').replace(/'/g, \"''\")}', ${$json.persist.storage_accessible === true ? 'true' : ($json.persist.storage_accessible === false ? 'false' : 'NULL')}, '${JSON.stringify($json.persist.problems || []).replace(/'/g, \"''\")}'::jsonb, '${JSON.stringify($json.persist.observation || {}).replace(/'/g, \"''\")}'::jsonb, ${$json.persist.test_mode ? 'true' : 'false'});` }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2200,
+        0
+      ],
+      "name": "Persist Snapshot",
+      "credentials": {
+        "postgres": {
+          "id": "{{CREDENTIAL_ID}}",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst data = $json;\nconst persist = data.persist;\nconst events = Array.isArray(data.events) ? data.events : [];\nif (!events.length) {\n  return [{ json: { should_emit: false, persist, skip_event: true } }];\n}\nreturn events.map((ev) => ({ json: { ...ev, persist, skip_event: false } }));\n",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        0
+      ],
+      "name": "Expand Events"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.should_emit }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        2640,
+        0
+      ],
+      "name": "Should Notify?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "{{$env.N8N_WEBHOOK_BASE}}/webhook/hestia-event",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{\n{\n  source: $json.source,\n  severity: $json.severity,\n  component: $json.component,\n  event: $json.event,\n  status: $json.status,\n  timestamp: $json.timestamp,\n  message: $json.message,\n  details: $json.details,\n  correlation_id: $json.correlation_id,\n  requires_attention: $json.requires_attention,\n  suggested_action: $json.suggested_action\n}\n}}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2860,
+        -80
+      ],
+      "name": "Hestia Event Bus",
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get Immich Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Immich Jobs": {
+      "main": [
+        [
+          {
+            "node": "Get Immich Server Statistics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Immich Server Statistics": {
+      "main": [
+        [
+          {
+            "node": "Get Immich Asset Statistics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Immich Asset Statistics": {
+      "main": [
+        [
+          {
+            "node": "Get Immich Storage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Immich Storage": {
+      "main": [
+        [
+          {
+            "node": "Get Immich About",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Immich About": {
+      "main": [
+        [
+          {
+            "node": "Get Immich ML Ping",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Immich ML Ping": {
+      "main": [
+        [
+          {
+            "node": "Build Snapshot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Snapshot": {
+      "main": [
+        [
+          {
+            "node": "Get Previous State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Previous State": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Changes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Changes": {
+      "main": [
+        [
+          {
+            "node": "Persist Snapshot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Persist Snapshot": {
+      "main": [
+        [
+          {
+            "node": "Expand Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Expand Events": {
+      "main": [
+        [
+          {
+            "node": "Should Notify?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Notify?": {
+      "main": [
+        [
+          {
+            "node": "Hestia Event Bus",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "timezone": "America/Sao_Paulo"
+  },
+  "meta": {
+    "templateSource": "VinyLab-Automation-Hub",
+    "sanitized": true
+  },
+  "pinData": {},
+  "active": false
+}

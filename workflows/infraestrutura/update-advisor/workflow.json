@@ -1,0 +1,681 @@
+{
+  "name": "14 - UPDATE ADVISOR",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "30 6 * * *"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ],
+      "name": "Daily Schedule"
+    },
+    {
+      "parameters": {
+        "url": "{{$env.SERVICE_BASE_URL}}/v1/backups",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={ 'Bearer ' + $env.OMEAB_HEALTH_TOKEN }"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        240,
+        -160
+      ],
+      "name": "Get Backup Status",
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "{{$env.SERVICE_BASE_URL}}/v1/storage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={ 'Bearer ' + $env.OMEAB_HEALTH_TOKEN }"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        240,
+        -40
+      ],
+      "name": "Get Storage Status",
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "{{$env.SERVICE_BASE_URL}}/v1/docker",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={ 'Bearer ' + $env.OMEAB_HEALTH_TOKEN }"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        240,
+        80
+      ],
+      "name": "Get Docker Status",
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SHOW server_version;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        240,
+        200
+      ],
+      "name": "Get Postgres Version",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "{{CREDENTIAL_ID}}",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT overall_status FROM immich_monitor_state ORDER BY timestamp DESC LIMIT 1;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        240,
+        320
+      ],
+      "name": "Get Immich Status",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "{{CREDENTIAL_ID}}",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "\nSELECT DISTINCT ON (component)\n  component, installed_version, available_version, update_type, risk, recommendation,\n  security_signal, breaking_change_signal, update_available, source, source_status, checked_at, details\nFROM update_advisor_state\nORDER BY component, checked_at DESC;\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        240,
+        440
+      ],
+      "name": "Get Previous States",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "{{CREDENTIAL_ID}}",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT component, source_fail_streak, last_event_fingerprint, last_installed_version, last_available_version, last_recommendation FROM update_advisor_meta;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        240,
+        560
+      ],
+      "name": "Get Advisor Meta",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "{{CREDENTIAL_ID}}",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 7,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        520,
+        120
+      ],
+      "name": "Wait All Context"
+    },
+    {
+      "parameters": {
+        "jsCode": "function safe(name) {\n  try { return $(name).first().json || {}; } catch (e) { return { _error: true, _message: String(e.message || e) }; }\n}\n\nconst backup = safe('Get Backup Status');\nconst storage = safe('Get Storage Status');\nconst docker = safe('Get Docker Status');\nconst pg = safe('Get Postgres Version');\nconst immich = safe('Get Immich Status');\nconst prevRows = (() => { try { return $('Get Previous States').all().map(i => i.json).filter(Boolean); } catch (e) { return []; } })();\nconst metaRows = (() => { try { return $('Get Advisor Meta').all().map(i => i.json).filter(Boolean); } catch (e) { return []; } })();\n\nlet backup_status = 'unknown';\nif (backup && backup.healthy === true) backup_status = 'healthy';\nelse if (backup && backup.healthy === false) backup_status = 'degraded';\n\nlet system_status = 'healthy';\nif (storage && storage.healthy === false) system_status = 'degraded';\nif (immich && immich.overall_status && immich.overall_status !== 'healthy') system_status = 'degraded';\nif (docker && docker.healthy === false) system_status = 'degraded';\n\nconst previous_by_component = {};\nfor (const r of prevRows) {\n  if (!r.component) continue;\n  previous_by_component[r.component] = r;\n}\n\nconst meta_by_component = {};\nfor (const r of metaRows) {\n  if (!r.component) continue;\n  meta_by_component[r.component] = r;\n}\n\nconst postgres_version = pg.server_version || pg.version || null;\n\nreturn [{\n  json: {\n    evaluate_request: {\n      context: {\n        backup_status,\n        system_status,\n        storage_healthy: storage.healthy === true,\n        docker_healthy: docker.healthy === true,\n        immich_status: immich.overall_status || 'unknown',\n      },\n      docker_containers: Array.isArray(docker.containers) ? docker.containers : [],\n      postgres_version,\n      previous_by_component,\n      meta_by_component,\n    },\n  },\n}];",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        740,
+        120
+      ],
+      "name": "Build Evaluate Request"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "{{$env.OMEAB_SERVICE_URL}}/v1/evaluate",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.UPDATE_ADVISOR_TOKEN }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.evaluate_request }}",
+        "options": {
+          "timeout": 120000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        980,
+        120
+      ],
+      "name": "Call Update Advisor",
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const result = $('Call Update Advisor').first().json || {};\nconst components = Array.isArray(result.components) ? result.components : [];\nconst events = Array.isArray(result.events) ? result.events : [];\nconst metaUpdates = result.meta_updates || {};\nconst now = new Date().toISOString();\n\nconst persistItems = components.map((c) => ({\n  json: {\n    kind: 'persist',\n    checked_at: now,\n    component: c.component,\n    installed_version: c.installed_version ?? null,\n    available_version: c.available_version ?? null,\n    update_type: c.update_type ?? null,\n    risk: c.risk ?? null,\n    recommendation: c.recommendation ?? null,\n    security_signal: !!c.security_signal,\n    breaking_change_signal: !!c.breaking_change_signal,\n    update_available: !!c.update_available,\n    source: c.source ?? null,\n    source_status: c.source_status ?? null,\n    details: c.details || {},\n  },\n}));\n\nconst metaItems = Object.entries(metaUpdates).map(([component, m]) => ({\n  json: {\n    kind: 'meta',\n    component,\n    source_fail_streak: Number(m.source_fail_streak || 0),\n    last_event_fingerprint: m.last_event_fingerprint ?? null,\n    last_installed_version: m.last_installed_version ?? null,\n    last_available_version: m.last_available_version ?? null,\n    last_recommendation: m.last_recommendation ?? null,\n  },\n}));\n\nconst eventItems = events.map((ev) => ({\n  json: {\n    kind: 'event',\n    should_emit: true,\n    source: 'update_advisor',\n    severity: ev.severity || 'info',\n    component: 'updates',\n    event: ev.event,\n    status: ev.recommendation || 'advisory',\n    timestamp: now,\n    message: ev.message || `Update advisor: ${ev.event}`,\n    details: {\n      target_component: ev.component,\n      installed_version: ev.installed_version ?? null,\n      available_version: ev.available_version ?? null,\n      update_type: ev.update_type ?? null,\n      risk: ev.risk ?? null,\n      recommendation: ev.recommendation ?? null,\n      security_signal: !!ev.security_signal,\n      breaking_change_signal: !!ev.breaking_change_signal,\n      advisory_only: true,\n      executed_updates: false,\n    },\n    requires_attention: (ev.severity || 'info') !== 'info',\n    suggested_action: ev.recommendation === 'defer'\n      ? 'Adiar atualização até backup/sistema saudáveis.'\n      : 'Revisar recomendação; nenhuma alteração automática será feita.',\n    correlation_id: `update-advisor:${ev.component}:${ev.event}`,\n  },\n}));\n\nif (!persistItems.length) {\n  persistItems.push({ json: { kind: 'persist', skip: true } });\n}\n\nreturn [...persistItems, ...metaItems, ...eventItems];",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        120
+      ],
+      "name": "Prepare Persist And Events"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "1fd524df-157a-58b4-aa06-4eb6d1c19cc9",
+                    "leftValue": "={{ $json.kind }}",
+                    "rightValue": "persist",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "persist"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "88f0cd58-944b-5a6a-b0d9-57c06a79a6e8",
+                    "leftValue": "={{ $json.kind }}",
+                    "rightValue": "meta",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "meta"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "4f2558cc-7a4a-5536-9499-e5ca5998be04",
+                    "leftValue": "={{ $json.kind }}",
+                    "rightValue": "event",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "event"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        1440,
+        120
+      ],
+      "name": "Route Outputs"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{\n(() => {\n  if ($json.skip) return 'SELECT 1 AS skipped;';\n  const esc = (v) => String(v ?? '').replace(/'/g, \"''\");\n  const comp = esc($json.component).slice(0, 100);\n  if (!comp) return 'SELECT 1 AS skipped_empty;';\n  const details = JSON.stringify($json.details || {}).replace(/'/g, \"''\");\n  const nul = (v) => (v === null || v === undefined || v === '') ? 'NULL' : `'${esc(v)}'`;\n  return `\nINSERT INTO update_advisor_state (\n  component, installed_version, available_version, update_type, risk, recommendation,\n  security_signal, breaking_change_signal, update_available, source, source_status, checked_at, details\n) VALUES (\n  '${comp}',\n  ${nul($json.installed_version)},\n  ${nul($json.available_version)},\n  ${nul($json.update_type)},\n  ${nul($json.risk)},\n  ${nul($json.recommendation)},\n  ${$json.security_signal ? 'true' : 'false'},\n  ${$json.breaking_change_signal ? 'true' : 'false'},\n  ${$json.update_available ? 'true' : 'false'},\n  ${nul($json.source)},\n  ${nul($json.source_status)},\n  '${esc($json.checked_at)}'::timestamptz,\n  '${details}'::jsonb\n);`;\n})()\n}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1680,
+        -40
+      ],
+      "name": "Persist State",
+      "credentials": {
+        "postgres": {
+          "id": "{{CREDENTIAL_ID}}",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{\n(() => {\n  const esc = (v) => String(v ?? '').replace(/'/g, \"''\");\n  const comp = esc($json.component).slice(0, 100);\n  const nul = (v) => (v === null || v === undefined || v === '') ? 'NULL' : `'${esc(v)}'`;\n  return `\nINSERT INTO update_advisor_meta (\n  component, source_fail_streak, last_event_fingerprint,\n  last_installed_version, last_available_version, last_recommendation, updated_at\n) VALUES (\n  '${comp}',\n  ${Number($json.source_fail_streak || 0)},\n  ${nul($json.last_event_fingerprint)},\n  ${nul($json.last_installed_version)},\n  ${nul($json.last_available_version)},\n  ${nul($json.last_recommendation)},\n  now()\n)\nON CONFLICT (component) DO UPDATE SET\n  source_fail_streak = EXCLUDED.source_fail_streak,\n  last_event_fingerprint = EXCLUDED.last_event_fingerprint,\n  last_installed_version = EXCLUDED.last_installed_version,\n  last_available_version = EXCLUDED.last_available_version,\n  last_recommendation = EXCLUDED.last_recommendation,\n  updated_at = now();`;\n})()\n}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1680,
+        120
+      ],
+      "name": "Upsert Meta",
+      "credentials": {
+        "postgres": {
+          "id": "{{CREDENTIAL_ID}}",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.should_emit }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1680,
+        280
+      ],
+      "name": "Should Emit Event?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "{{$env.N8N_WEBHOOK_BASE}}/webhook/hestia-event",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{\n{\n  source: $json.source,\n  severity: $json.severity,\n  component: $json.component,\n  event: $json.event,\n  status: $json.status,\n  timestamp: $json.timestamp,\n  message: $json.message,\n  details: $json.details,\n  requires_attention: $json.requires_attention,\n  suggested_action: $json.suggested_action,\n  correlation_id: $json.correlation_id\n}\n}}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1920,
+        220
+      ],
+      "name": "Send to Hestia Event Bus",
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    }
+  ],
+  "connections": {
+    "Daily Schedule": {
+      "main": [
+        [
+          {
+            "node": "Get Backup Status",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Storage Status",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Docker Status",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Postgres Version",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Immich Status",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Previous States",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Advisor Meta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Backup Status": {
+      "main": [
+        [
+          {
+            "node": "Wait All Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Storage Status": {
+      "main": [
+        [
+          {
+            "node": "Wait All Context",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Get Docker Status": {
+      "main": [
+        [
+          {
+            "node": "Wait All Context",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Get Postgres Version": {
+      "main": [
+        [
+          {
+            "node": "Wait All Context",
+            "type": "main",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "Get Immich Status": {
+      "main": [
+        [
+          {
+            "node": "Wait All Context",
+            "type": "main",
+            "index": 4
+          }
+        ]
+      ]
+    },
+    "Get Previous States": {
+      "main": [
+        [
+          {
+            "node": "Wait All Context",
+            "type": "main",
+            "index": 5
+          }
+        ]
+      ]
+    },
+    "Get Advisor Meta": {
+      "main": [
+        [
+          {
+            "node": "Wait All Context",
+            "type": "main",
+            "index": 6
+          }
+        ]
+      ]
+    },
+    "Wait All Context": {
+      "main": [
+        [
+          {
+            "node": "Build Evaluate Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Evaluate Request": {
+      "main": [
+        [
+          {
+            "node": "Call Update Advisor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call Update Advisor": {
+      "main": [
+        [
+          {
+            "node": "Prepare Persist And Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Persist And Events": {
+      "main": [
+        [
+          {
+            "node": "Route Outputs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Outputs": {
+      "main": [
+        [
+          {
+            "node": "Persist State",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Upsert Meta",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Should Emit Event?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Emit Event?": {
+      "main": [
+        [
+          {
+            "node": "Send to Hestia Event Bus",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "meta": {
+    "templateSource": "VinyLab-Automation-Hub",
+    "sanitized": true
+  },
+  "pinData": {},
+  "active": false
+}

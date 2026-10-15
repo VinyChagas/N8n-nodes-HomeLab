@@ -1,0 +1,400 @@
+{
+  "name": "06 - DAILY OMEAB REPORT",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * *"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ],
+      "name": "Daily Schedule"
+    },
+    {
+      "parameters": {
+        "url": "{{$env.SERVICE_BASE_URL}}/v1/system",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.OMEAB_HEALTH_TOKEN }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        220,
+        0
+      ],
+      "name": "Get System Health",
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "{{$env.SERVICE_BASE_URL}}/v1/storage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.OMEAB_HEALTH_TOKEN }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        440,
+        0
+      ],
+      "name": "Get Storage Health",
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "{{$env.SERVICE_BASE_URL}}/v1/disk-capacity",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.OMEAB_HEALTH_TOKEN }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        660,
+        0
+      ],
+      "name": "Get Disk Capacity",
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "{{$env.SERVICE_BASE_URL}}/v1/docker",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.OMEAB_HEALTH_TOKEN }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        880,
+        0
+      ],
+      "name": "Get Docker Health",
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "{{$env.SERVICE_BASE_URL}}/v1/backups",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.OMEAB_HEALTH_TOKEN }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1100,
+        0
+      ],
+      "name": "Get Backup Health",
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  event,\n  severity,\n  status,\n  source,\n  component,\n  message,\n  requires_attention,\n  created_at,\n  timestamp,\n  details\nFROM hestia_events\nWHERE created_at >= NOW() - INTERVAL '24 hours'\nORDER BY created_at DESC\nLIMIT 200;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1320,
+        0
+      ],
+      "name": "Get Last 24h Events",
+      "credentials": {
+        "postgres": {
+          "id": "{{CREDENTIAL_ID}}",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "function safeNode(name) {\n  try {\n    const item = $(name).first();\n    if (!item) return { status: 'unavailable', reason: 'empty', data: null };\n    const j = item.json ?? {};\n    if (j.error || j.message === 'Error' || (typeof j.statusCode === 'number' && j.statusCode >= 400)) {\n      return { status: 'unavailable', reason: j.error?.message || j.message || 'http_error', data: null };\n    }\n    // neverError may put body under data\n    const body = j.data && typeof j.data === 'object' && !Array.isArray(j.data) && (j.statusCode || j.headers)\n      ? j.data\n      : j;\n    if (body && body.error && !body.hostname && !body.filesystems && !body.containers && !body.healthy && body.device_present === undefined) {\n      return { status: 'unavailable', reason: String(body.error), data: null };\n    }\n    return { status: 'available', reason: null, data: body };\n  } catch (e) {\n    return { status: 'unavailable', reason: String(e.message || e), data: null };\n  }\n}\n\nfunction round1(n) {\n  const x = Number(n);\n  return Number.isFinite(x) ? Math.round(x * 10) / 10 : null;\n}\n\nconst now = new Date();\nconst toIso = now.toISOString();\nconst from = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();\n\nconst systemSrc = safeNode('Get System Health');\nconst storageSrc = safeNode('Get Storage Health');\nconst diskSrc = safeNode('Get Disk Capacity');\nconst dockerSrc = safeNode('Get Docker Health');\nconst backupSrc = safeNode('Get Backup Health');\n\nlet eventsRaw = [];\ntry {\n  eventsRaw = $('Get Last 24h Events').all().map((i) => i.json).filter(Boolean);\n  // Postgres dummy empty row when no events may still return one empty object\n  if (eventsRaw.length === 1 && eventsRaw[0].event == null && eventsRaw[0].severity == null) {\n    eventsRaw = [];\n  }\n} catch (e) {\n  eventsRaw = null;\n}\n\nconst eventsAvailable = Array.isArray(eventsRaw);\nconst eventsList = eventsAvailable ? eventsRaw : [];\n\nconst sevCount = { info: 0, warning: 0, error: 0, critical: 0 };\nlet requiresAttention = 0;\nfor (const e of eventsList) {\n  const s = String(e.severity || 'info').toLowerCase();\n  if (sevCount[s] !== undefined) sevCount[s] += 1;\n  else sevCount.info += 1;\n  if (e.requires_attention === true || e.requires_attention === 't' || e.requires_attention === 'true') {\n    requiresAttention += 1;\n  }\n}\n\nconst rank = { critical: 1, error: 2, warning: 3, info: 4 };\nconst sorted = [...eventsList].sort((a, b) => {\n  const ra = rank[String(a.severity || 'info').toLowerCase()] ?? 9;\n  const rb = rank[String(b.severity || 'info').toLowerCase()] ?? 9;\n  if (ra !== rb) return ra - rb;\n  return String(b.created_at || '').localeCompare(String(a.created_at || ''));\n});\n\nconst topEvents = sorted.slice(0, 8).map((e) => ({\n  source: e.source ?? null,\n  component: e.component ?? null,\n  event: e.event ?? null,\n  severity: e.severity ?? null,\n  status: e.status ?? null,\n  message: e.message ?? null,\n  requires_attention: e.requires_attention === true || e.requires_attention === 't' || e.requires_attention === 'true',\n  created_at: e.created_at ?? e.timestamp ?? null,\n}));\n\n// ---- normalize sections ----\nconst system = systemSrc.status === 'available'\n  ? {\n      status: 'available',\n      hostname: systemSrc.data.hostname ?? null,\n      uptime_seconds: systemSrc.data.uptime_seconds ?? null,\n      uptime_human: systemSrc.data.uptime_human ?? null,\n      cpu_percent: systemSrc.data.cpu?.usage_percent ?? null,\n      load_1m: round1(systemSrc.data.cpu?.load_1m),\n      load_5m: round1(systemSrc.data.cpu?.load_5m),\n      load_15m: round1(systemSrc.data.cpu?.load_15m),\n      ram_percent: systemSrc.data.memory?.used_percent ?? null,\n      ram_used_bytes: systemSrc.data.memory?.used_bytes ?? null,\n      ram_total_bytes: systemSrc.data.memory?.total_bytes ?? null,\n    }\n  : { status: 'unavailable', reason: systemSrc.reason };\n\nconst storage = storageSrc.status === 'available'\n  ? {\n      status: 'available',\n      healthy: storageSrc.data.healthy === true,\n      device_present: storageSrc.data.device_present === true,\n      mounted: storageSrc.data.mounted === true,\n      mode: storageSrc.data.mode ?? null,\n      filesystem: storageSrc.data.filesystem ?? null,\n      device: storageSrc.data.device ?? null,\n      mountpoint: storageSrc.data.mountpoint ?? null,\n      identity_match: storageSrc.data.identity_match === true,\n      used_percent: storageSrc.data.used_percent ?? null,\n      kernel_errors: storageSrc.data.kernel_errors ?? null,\n      emergency_ro: storageSrc.data.emergency_ro === true,\n    }\n  : { status: 'unavailable', reason: storageSrc.reason };\n\nconst disk_capacity = diskSrc.status === 'available'\n  ? {\n      status: 'available',\n      thresholds: diskSrc.data.thresholds ?? null,\n      worst_capacity_state: diskSrc.data.summary?.worst_capacity_state ?? null,\n      filesystems: (diskSrc.data.filesystems || []).map((fs) => ({\n        mount: fs.mount,\n        used_percent: fs.used_percent,\n        free_gb: fs.free_gb,\n        total_gb: fs.total_gb,\n        capacity_state: fs.capacity_state,\n        available: fs.available !== false,\n      })),\n    }\n  : { status: 'unavailable', reason: diskSrc.reason };\n\nconst docker = dockerSrc.status === 'available'\n  ? {\n      status: 'available',\n      healthy: dockerSrc.data.healthy === true,\n      summary: dockerSrc.data.summary ?? null,\n      critical_problems: (dockerSrc.data.containers || [])\n        .filter((c) => c.expected === true && c.ok !== true && String(c.criticality).toLowerCase() === 'critical')\n        .map((c) => ({ name: c.name, state: c.state, health: c.health })),\n      problem_containers: (dockerSrc.data.containers || [])\n        .filter((c) => c.expected === true && c.ok !== true)\n        .map((c) => ({ name: c.name, state: c.state, health: c.health, criticality: c.criticality })),\n    }\n  : { status: 'unavailable', reason: dockerSrc.reason };\n\nconst backups = backupSrc.status === 'available'\n  ? {\n      status: 'available',\n      healthy: backupSrc.data.healthy === true,\n      checked_at: backupSrc.data.checked_at ?? null,\n      postgres: backupSrc.data.postgres ?? null,\n      restic: backupSrc.data.restic ?? null,\n      offsite: backupSrc.data.offsite ?? null,\n      issues: backupSrc.data.issues ?? [],\n    }\n  : { status: 'unavailable', reason: backupSrc.reason };\n\n// Postgres from docker inventory\nlet postgres = { status: 'unavailable', reason: 'docker_unavailable' };\nif (dockerSrc.status === 'available') {\n  const pg = (dockerSrc.data.containers || []).find((c) => c.name === 'postgres');\n  if (pg) {\n    postgres = {\n      status: 'available',\n      container: pg.name,\n      state: pg.state,\n      health: pg.health,\n      ok: pg.ok === true,\n      criticality: pg.criticality ?? null,\n    };\n  } else {\n    postgres = { status: 'unavailable', reason: 'postgres_container_not_found' };\n  }\n}\n\n// Services from uptime_kuma events (safe, read-only)\nconst serviceEvents = eventsList.filter((e) => e.source === 'uptime_kuma');\nconst services = eventsAvailable\n  ? {\n      status: 'available',\n      source: 'hestia_events',\n      down_24h: serviceEvents.filter((e) => e.event === 'service_down').length,\n      recovered_24h: serviceEvents.filter((e) => e.event === 'service_recovered').length,\n      note: 'Disponibilidade derivada dos eventos Uptime Kuma nas últimas 24h (sem API externa).',\n    }\n  : { status: 'unavailable', reason: 'events_unavailable' };\n\nconst internet = {\n  status: 'not_monitored',\n  message: 'Internet Watch não faz parte deste relatório.',\n};\n\nconst events = eventsAvailable\n  ? {\n      status: 'available',\n      total: eventsList.length,\n      info: sevCount.info,\n      warning: sevCount.warning,\n      error: sevCount.error,\n      critical: sevCount.critical,\n      requires_attention: requiresAttention,\n      top_events: topEvents,\n    }\n  : { status: 'unavailable', reason: 'query_failed', total: 0, info: 0, warning: 0, error: 0, critical: 0, requires_attention: 0, top_events: [] };\n\n// ---- overall_status (deterministic, live sources) ----\nlet overall = 'healthy';\nconst reasons = [];\n\nif (storage.status === 'available') {\n  if (!storage.device_present || !storage.mounted || storage.mode === 'ro' || storage.emergency_ro || storage.healthy !== true) {\n    overall = 'critical';\n    reasons.push('storage_unhealthy');\n  }\n}\nif (disk_capacity.status === 'available' && disk_capacity.worst_capacity_state === 'critical') {\n  overall = 'critical';\n  reasons.push('disk_capacity_critical');\n}\nif (docker.status === 'available' && (docker.critical_problems || []).length > 0) {\n  overall = 'critical';\n  reasons.push('docker_critical_problem');\n}\nif (backups.status === 'available' && backups.healthy !== true) {\n  const hasCriticalIssue = (backups.issues || []).some((i) => String(i.severity).toLowerCase() === 'critical');\n  if (hasCriticalIssue) {\n    overall = 'critical';\n    reasons.push('backup_critical');\n  }\n}\n\nif (overall !== 'critical') {\n  if (disk_capacity.status === 'available' && ['warning', 'error'].includes(disk_capacity.worst_capacity_state)) {\n    overall = 'degraded';\n    reasons.push('disk_capacity_' + disk_capacity.worst_capacity_state);\n  }\n  if (docker.status === 'available' && ((docker.summary?.unhealthy || 0) > 0 || (docker.summary?.restarting || 0) > 0 || (docker.summary?.stopped || 0) > 0 || (docker.problem_containers || []).length > 0)) {\n    overall = 'degraded';\n    reasons.push('docker_degraded');\n  }\n  if (backups.status === 'available' && (backups.healthy !== true || (backups.issues || []).length > 0)) {\n    overall = 'degraded';\n    reasons.push('backup_issues');\n  }\n  if (postgres.status === 'available' && postgres.ok !== true) {\n    overall = 'degraded';\n    reasons.push('postgres_not_ok');\n  }\n  // Partial data unavailability degrades, does not go critical alone\n  const unavailableLive = [system, storage, disk_capacity, docker, backups].filter((s) => s.status === 'unavailable').length;\n  if (unavailableLive > 0) {\n    overall = overall === 'healthy' ? 'degraded' : overall;\n    reasons.push('partial_source_unavailable');\n  }\n}\n\nconst summaryText =\n  overall === 'healthy'\n    ? 'OMEAB operando normalmente.'\n    : overall === 'degraded'\n      ? 'OMEAB operacional com atenção recomendada.'\n      : 'OMEAB requer atenção imediata.';\n\nconst sources = {\n  available: [],\n  unavailable: [],\n  not_monitored: ['internet'],\n};\nfor (const [k, v] of Object.entries({ system, storage, disk_capacity, docker, backups, services, postgres, events })) {\n  if (v.status === 'available') sources.available.push(k);\n  else if (v.status === 'unavailable') sources.unavailable.push(k);\n}\n\nconst snapshot = {\n  report_type: 'daily_omeab',\n  generated_at: toIso,\n  period: { from, to: toIso },\n  overall_status: overall,\n  overall_reasons: reasons,\n  summary: summaryText,\n  system,\n  storage,\n  disk_capacity,\n  docker,\n  backups,\n  services,\n  postgres,\n  internet,\n  events,\n  sources,\n};\n\nreturn [{ json: { snapshot } }];\n",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        0
+      ],
+      "name": "Build Daily Snapshot"
+    },
+    {
+      "parameters": {
+        "jsCode": "const snap = $json.snapshot;\nconst icon = { healthy: '🟢', degraded: '🟡', critical: '🔴' };\nconst o = snap.overall_status || 'healthy';\n\nfunction lineOrWarn(ok, okText, warnText) {\n  return ok ? okText : warnText;\n}\n\nconst sys = snap.system;\nconst storage = snap.storage;\nconst disk = snap.disk_capacity;\nconst docker = snap.docker;\nconst backups = snap.backups;\nconst postgres = snap.postgres;\nconst events = snap.events;\nconst internet = snap.internet;\n\nconst lines = [];\nlines.push('🏠 OMEAB — Resumo diário');\nlines.push('');\n\n// Server\nlines.push('🖥 Servidor');\nif (sys.status === 'available') {\n  lines.push(`${icon.healthy} Online há ${sys.uptime_human || '?'}`);\n  lines.push(`CPU: ${sys.cpu_percent ?? '?'}%`);\n  lines.push(`RAM: ${sys.ram_percent ?? '?'}%`);\n  if (sys.load_1m != null) lines.push(`Load: ${sys.load_1m} / ${sys.load_5m} / ${sys.load_15m}`);\n} else {\n  lines.push('⚠️ Dados de sistema indisponíveis');\n}\nlines.push('');\n\n// Storage + disk\nlines.push('💾 Armazenamento');\nif (storage.status === 'available') {\n  const stIcon = storage.healthy && storage.mounted && storage.mode === 'rw' ? icon.healthy : icon.critical;\n  lines.push(`${stIcon} RAID ${storage.mounted ? 'montado' : 'NÃO montado'} ${String(storage.mode || '').toUpperCase()}`);\n} else {\n  lines.push('⚠️ Storage: dados indisponíveis');\n}\nif (disk.status === 'available') {\n  for (const fs of disk.filesystems || []) {\n    const mark = fs.capacity_state === 'normal' ? icon.healthy : fs.capacity_state === 'warning' ? '🟡' : '🔴';\n    lines.push(`${mark} ${fs.mount}: ${fs.used_percent}% utilizado (${fs.free_gb} GB livres)`);\n  }\n} else {\n  lines.push('⚠️ Capacidade de disco: dados indisponíveis');\n}\nlines.push('');\n\n// Docker\nlines.push('🐳 Docker');\nif (docker.status === 'available') {\n  const s = docker.summary || {};\n  const dIcon = docker.healthy && (s.stopped || 0) === 0 && (s.unhealthy || 0) === 0 ? icon.healthy : icon.degraded;\n  lines.push(`${dIcon} ${s.running ?? '?'}/${s.total ?? '?'} containers operacionais`);\n  lines.push(`Unhealthy: ${s.unhealthy ?? 0}`);\n  lines.push(`Restarting: ${s.restarting ?? 0}`);\n} else {\n  lines.push('⚠️ Dados indisponíveis');\n}\nlines.push('');\n\n// Backup\nlines.push('💾 Backup');\nif (backups.status === 'available') {\n  const bIcon = backups.healthy ? icon.healthy : icon.degraded;\n  const resticAt = backups.restic?.last_backup_at || backups.restic?.last_snapshot_at || 'n/d';\n  lines.push(`${bIcon} ${backups.healthy ? 'Backup atualizado' : 'Backup com pendências'}`);\n  lines.push(`Último Restic: ${resticAt}`);\n  if ((backups.issues || []).length) {\n    for (const issue of backups.issues.slice(0, 3)) {\n      lines.push(`• ${issue.message || issue.code || 'issue'}`);\n    }\n  }\n} else {\n  lines.push('⚠️ Dados indisponíveis');\n}\nlines.push('');\n\n// Postgres\nlines.push('🗄 PostgreSQL');\nif (postgres.status === 'available') {\n  lines.push(`${postgres.ok ? icon.healthy : icon.degraded} ${postgres.ok ? 'Online' : `Estado: ${postgres.state}/${postgres.health}`}`);\n} else {\n  lines.push('⚠️ Dados indisponíveis');\n}\nlines.push('');\n\n// Internet\nlines.push('🌐 Internet');\nlines.push('⚪ Não monitorado neste relatório');\nlines.push('');\n\n// Events\nlines.push('📋 Últimas 24h');\nif (events.status === 'available') {\n  lines.push(`• ${events.critical} CRITICAL`);\n  lines.push(`• ${events.error} ERROR`);\n  lines.push(`• ${events.warning} WARNING`);\n  lines.push(`• ${events.info} INFO`);\n  lines.push(`• ${events.requires_attention} requerem atenção`);\n  if ((events.top_events || []).length) {\n    lines.push('Destaques:');\n    for (const ev of events.top_events.slice(0, 5)) {\n      lines.push(`• [${String(ev.severity || '').toUpperCase()}] ${ev.event}: ${String(ev.message || '').slice(0, 90)}`);\n    }\n  }\n} else {\n  lines.push('⚠️ Eventos indisponíveis');\n}\nlines.push('');\nlines.push(`Estado geral: ${o.toUpperCase()}`);\nlines.push(`Resumo: \"${snap.summary}\"`);\nlines.push('');\nlines.push('— Hestia / OMEAB Daily Report');\n\nconst text = lines.join('\\n');\n\nreturn [{\n  json: {\n    snapshot: snap,\n    alert: {\n      type: 'HESTIA_DAILY_REPORT',\n      priority: o === 'critical' ? 'high' : 'normal',\n      text,\n    },\n  },\n}];\n",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        0
+      ],
+      "name": "Prepare Daily Message"
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\n\nconst event = $json;\nconst secret = $env.HESTIA_WEBHOOK_SECRET;\n\nif (!secret) {\n  throw new Error('HESTIA_WEBHOOK_SECRET não está disponível no ambiente do n8n.');\n}\n\n// Reutiliza rota hestia-alerts (deliver_only=true):\n// o texto formatado É a mensagem Telegram. Snapshot estruturado fica no workflow.\nconst body = JSON.stringify({\n  alert: {\n    text: event.alert.text,\n  },\n});\n\nconst timestamp = String(Math.floor(Date.now() / 1000));\nconst canonicalPayload = `${timestamp}.${body}`;\nconst signature = crypto\n  .createHmac('sha256', secret)\n  .update(canonicalPayload, 'utf8')\n  .digest('hex');\n\nreturn [{\n  json: {\n    ...event,\n    hermes_request: {\n      body,\n      timestamp,\n      signature,\n      body_bytes: Buffer.byteLength(body, 'utf8'),\n    },\n  },\n}];\n",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        0
+      ],
+      "name": "Generate HMAC"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "{{$env.HERMES_URL}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Webhook-Timestamp",
+              "value": "={{ $json.hermes_request.timestamp }}"
+            },
+            {
+              "name": "X-Webhook-Signature-V2",
+              "value": "={{ $json.hermes_request.signature }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.hermes_request.body }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2200,
+        0
+      ],
+      "name": "Send Daily Report to Hestia"
+    }
+  ],
+  "connections": {
+    "Daily Schedule": {
+      "main": [
+        [
+          {
+            "node": "Get System Health",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get System Health": {
+      "main": [
+        [
+          {
+            "node": "Get Storage Health",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Storage Health": {
+      "main": [
+        [
+          {
+            "node": "Get Disk Capacity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Disk Capacity": {
+      "main": [
+        [
+          {
+            "node": "Get Docker Health",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Docker Health": {
+      "main": [
+        [
+          {
+            "node": "Get Backup Health",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Backup Health": {
+      "main": [
+        [
+          {
+            "node": "Get Last 24h Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Last 24h Events": {
+      "main": [
+        [
+          {
+            "node": "Build Daily Snapshot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Daily Snapshot": {
+      "main": [
+        [
+          {
+            "node": "Prepare Daily Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Daily Message": {
+      "main": [
+        [
+          {
+            "node": "Generate HMAC",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate HMAC": {
+      "main": [
+        [
+          {
+            "node": "Send Daily Report to Hestia",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "timezone": "America/Sao_Paulo"
+  },
+  "meta": {
+    "templateSource": "VinyLab-Automation-Hub",
+    "sanitized": true
+  },
+  "pinData": {},
+  "active": false
+}

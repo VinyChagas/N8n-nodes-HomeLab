@@ -1,0 +1,677 @@
+{
+  "name": "18 - OMEAB SELF HEALTH",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ],
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "url": "{{$env.SERVICE_BASE_URL}}/health",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.OMEAB_HEALTH_TOKEN }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        240,
+        -120
+      ],
+      "name": "Get Health Agent",
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "{{$env.SERVICE_BASE_URL}}/api/v1/workflows?limit=50",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_PUBLIC_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        240,
+        40
+      ],
+      "name": "List n8n Workflows",
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT last_snapshot, last_fingerprints, overall_status FROM automation_self_health_meta WHERE id = 1;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        240,
+        200
+      ],
+      "name": "Get Self Health Meta",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "{{CREDENTIAL_ID}}",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "numberInputs": 3,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        460,
+        40
+      ],
+      "name": "Merge Inputs"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst REGISTRY = {\"version\":\"1.0\",\"updated_at\":\"2026-09-15\",\"notes\":\"Intent registry for OMEAB Self Health. expected_state reflects architectural INTENT, not only live active flag. 16/17 are known hardware/docs limitations — never incidents.\",\"defaults\":{\"grace_factor\":2.5,\"failure_streak_warn\":2,\"failure_streak_error\":3,\"schedule_minutes\":5},\"workflows\":[{\"slug\":\"00-hestia-event-bus\",\"workflow_id\":\"q3NtPXnyj8ahrZE4\",\"name\":\"00 - HESTIA EVENT BUS\",\"expected_state\":\"active\",\"architectural_status\":\"PRODUCTION\",\"trigger_type\":\"webhook\",\"expected_interval_minutes\":null,\"criticality\":\"critical\",\"heartbeat\":false,\"webhook_path\":\"hestia-event\",\"notes\":\"Circularidade: falha deste workflow usa break-glass, não Event Bus.\"},{\"slug\":\"01-storage-guardian\",\"workflow_id\":\"QgbD4Tq5Y9ss1WNn\",\"name\":\"01 - Storage Guardian\",\"expected_state\":\"active\",\"architectural_status\":\"PRODUCTION\",\"trigger_type\":\"schedule\",\"expected_interval_minutes\":5,\"criticality\":\"critical\",\"heartbeat\":true},{\"slug\":\"02-backup-verification\",\"workflow_id\":\"6ygWPzb6BmAszltQ\",\"name\":\"02 - BACKUP VERIFICATION\",\"expected_state\":\"active\",\"architectural_status\":\"PRODUCTION\",\"trigger_type\":\"schedule\",\"expected_interval_minutes\":60,\"criticality\":\"high\",\"heartbeat\":true},{\"slug\":\"03-service-down-alert\",\"workflow_id\":\"p2oLdKxpN30amaCP\",\"name\":\"03 - SERVICE DOWN ALERT\",\"expected_state\":\"active\",\"architectural_status\":\"PRODUCTION\",\"trigger_type\":\"webhook\",\"expected_interval_minutes\":null,\"criticality\":\"high\",\"heartbeat\":false,\"webhook_path\":\"service-status\"},{\"slug\":\"04-docker-guardian\",\"workflow_id\":\"Zr0csiByWPXFr2fp\",\"name\":\"04 - DOCKER GUARDIAN\",\"expected_state\":\"active\",\"architectural_status\":\"PRODUCTION\",\"trigger_type\":\"schedule\",\"expected_interval_minutes\":2,\"criticality\":\"high\",\"heartbeat\":true},{\"slug\":\"05-disk-capacity\",\"workflow_id\":\"FS0sbhhEITbwjIiu\",\"name\":\"05 - DISK CAPACITY\",\"expected_state\":\"active\",\"architectural_status\":\"PRODUCTION\",\"trigger_type\":\"schedule\",\"expected_interval_minutes\":15,\"criticality\":\"high\",\"heartbeat\":true},{\"slug\":\"06-daily-omeab-report\",\"workflow_id\":\"bTy3rORagky8vvxV\",\"name\":\"06 - DAILY OMEAB REPORT\",\"expected_state\":\"active\",\"architectural_status\":\"PRODUCTION\",\"trigger_type\":\"schedule\",\"expected_interval_minutes\":1440,\"criticality\":\"low\",\"heartbeat\":true,\"grace_factor\":1.5,\"notes\":\"Cron diário 08:00 America/Sao_Paulo; overdue só após janela ampla.\"},{\"slug\":\"07-weekly-omeab-report\",\"workflow_id\":\"39Hv71zsXm8ywVcF\",\"name\":\"07 - WEEKLY OMEAB REPORT\",\"expected_state\":\"active\",\"architectural_status\":\"PRODUCTION\",\"trigger_type\":\"schedule\",\"expected_interval_minutes\":10080,\"criticality\":\"low\",\"heartbeat\":true,\"grace_factor\":1.2},{\"slug\":\"08-rag-ingestion\",\"workflow_id\":\"eSMxEBeQkO6e9AQe\",\"name\":\"08 - RAG INGESTION\",\"expected_state\":\"active\",\"architectural_status\":\"PRODUCTION\",\"trigger_type\":\"schedule\",\"expected_interval_minutes\":15,\"criticality\":\"medium\",\"heartbeat\":true,\"notes\":\"Remoto ativo em 2026-09-15; registry acompanha produção real.\"},{\"slug\":\"09-obsidian-ingestion\",\"workflow_id\":\"muxe8lCimNdhUHLa\",\"name\":\"09 - OBSIDIAN INGESTION\",\"expected_state\":\"active\",\"architectural_status\":\"PRODUCTION\",\"trigger_type\":\"schedule\",\"expected_interval_minutes\":10,\"criticality\":\"medium\",\"heartbeat\":true},{\"slug\":\"10-audiobook-factory\",\"workflow_id\":\"voPbf0Kghc17iylD\",\"name\":\"10 - AUDIOBOOK FACTORY\",\"expected_state\":\"inactive\",\"architectural_status\":\"INTENTIONALLY_INACTIVE\",\"trigger_type\":\"schedule\",\"expected_interval_minutes\":15,\"criticality\":\"low\",\"heartbeat\":false,\"reason\":\"Homologação / ativação deliberada pendente\"},{\"slug\":\"11-media-automation\",\"workflow_id\":\"ZRdxRgJg5O3v2621\",\"name\":\"11 - MEDIA AUTOMATION\",\"expected_state\":\"active\",\"architectural_status\":\"PRODUCTION\",\"trigger_type\":\"schedule\",\"expected_interval_minutes\":10,\"criticality\":\"medium\",\"heartbeat\":true},{\"slug\":\"12-immich-monitor\",\"workflow_id\":\"KwpZAkGAJtv01vVO\",\"name\":\"12 - IMMICH MONITOR\",\"expected_state\":\"active\",\"architectural_status\":\"PRODUCTION\",\"trigger_type\":\"schedule\",\"expected_interval_minutes\":10,\"criticality\":\"medium\",\"heartbeat\":true},{\"slug\":\"13-hestia-action-router\",\"workflow_id\":\"F31jyiB0MnVv2j5U\",\"name\":\"13 - HESTIA ACTION ROUTER\",\"expected_state\":\"active\",\"architectural_status\":\"PRODUCTION\",\"trigger_type\":\"webhook\",\"expected_interval_minutes\":null,\"criticality\":\"medium\",\"heartbeat\":false,\"reason\":\"Ativo em produção (homologação 2026-09-15); monitorar conforme trigger\",\"webhook_path\":\"hestia-action\"},{\"slug\":\"14-update-advisor\",\"workflow_id\":\"EzD5yIeEbzPnGVcR\",\"name\":\"14 - UPDATE ADVISOR\",\"expected_state\":\"active\",\"architectural_status\":\"PRODUCTION\",\"trigger_type\":\"schedule\",\"expected_interval_minutes\":1440,\"criticality\":\"low\",\"heartbeat\":true,\"reason\":\"Ativo em produção (homologação 2026-09-15); monitorar conforme trigger\"},{\"slug\":\"15-storage-cleanup-advisor\",\"workflow_id\":\"ynF3RKMvbC6S3nmQ\",\"name\":\"15 - STORAGE CLEANUP ADVISOR\",\"expected_state\":\"active\",\"architectural_status\":\"PRODUCTION\",\"trigger_type\":\"schedule\",\"expected_interval_minutes\":1440,\"criticality\":\"low\",\"heartbeat\":true,\"reason\":\"Ativo em produção (homologação 2026-09-15); monitorar conforme trigger\"},{\"slug\":\"16-power-guardian\",\"workflow_id\":null,\"name\":\"16 - POWER GUARDIAN\",\"expected_state\":\"blocked\",\"architectural_status\":\"BLOCKED_HARDWARE\",\"trigger_type\":\"blocked\",\"expected_interval_minutes\":null,\"criticality\":\"high\",\"heartbeat\":false,\"reason\":\"POWER_GUARDIAN_BLOCKED_NO_UPS\",\"known_limitation\":true},{\"slug\":\"17-power-recovery\",\"workflow_id\":null,\"name\":\"17 - POWER RECOVERY\",\"expected_state\":\"blocked\",\"architectural_status\":\"DOCUMENTATION_ONLY\",\"trigger_type\":\"documentation-only\",\"expected_interval_minutes\":null,\"criticality\":\"high\",\"heartbeat\":false,\"reason\":\"POWER_RECOVERY_PREPARED_BLOCKED_NO_UPS\",\"known_limitation\":true},{\"slug\":\"19-configuration-drift-guardian\",\"workflow_id\":\"34sPKILG8zr8Okvi\",\"name\":\"19 - CONFIGURATION DRIFT GUARDIAN\",\"expected_state\":\"active\",\"architectural_status\":\"PRODUCTION\",\"trigger_type\":\"schedule\",\"expected_interval_minutes\":15,\"criticality\":\"high\",\"heartbeat\":true,\"grace_factor\":2.5,\"reason\":\"Ativo em produção (homologação 2026-09-15); Configuration Drift Guardian READ-ONLY\"},{\"slug\":\"20-incident-correlation-engine\",\"workflow_id\":\"A8seV6ObRlSBsNZ9\",\"name\":\"20 - INCIDENT CORRELATION ENGINE\",\"expected_state\":\"active\",\"architectural_status\":\"PRODUCTION\",\"trigger_type\":\"schedule\",\"expected_interval_minutes\":1,\"criticality\":\"high\",\"heartbeat\":true,\"grace_factor\":2.5,\"reason\":\"Ativo em produção (gate 2026-09-15); Incident Correlation Engine READ/ANALYZE/WRITE-incident-state only — sem auto-repair\"},{\"slug\":\"21-incident-notification-manager\",\"workflow_id\":\"7UAfZAfh111UdZXy\",\"name\":\"21 - INCIDENT NOTIFICATION MANAGER\",\"expected_state\":\"active\",\"architectural_status\":\"PRODUCTION\",\"trigger_type\":\"schedule\",\"expected_interval_minutes\":1,\"criticality\":\"high\",\"heartbeat\":true,\"grace_factor\":2.5,\"reason\":\"Ativo em Shadow Mode (gate 2026-09-15); Incident Notification Manager — enforcement=false, auto_suppression=false; sem caminho real de entrega\"}]};\nconst wfResp = $('List n8n Workflows').first().json || {};\nconst health = $('Get Health Agent').first().json || {};\nconst meta = $('Get Self Health Meta').first().json || {};\nconst workflowsOk = Array.isArray(wfResp.data);\nconst context = {\n  registry: REGISTRY,\n  workflows: workflowsOk ? wfResp.data : [],\n  workflowsOk,\n  health,\n  meta,\n  checked_at: new Date().toISOString(),\n  started_ms: Date.now(),\n};\nconst items = [];\nfor (const w of (REGISTRY.workflows || [])) {\n  if (!w.workflow_id) continue; // blocked/docs-only without id\n  items.push({ json: { ...context, target: w, workflow_id: w.workflow_id } });\n}\nif (!items.length) {\n  items.push({ json: { ...context, target: null, workflow_id: null, _empty: true } });\n}\nreturn items;\n",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        680,
+        40
+      ],
+      "name": "Build Exec Targets"
+    },
+    {
+      "parameters": {
+        "url": "={{ '{{$env.SERVICE_BASE_URL}}/api/v1/executions?limit=5&includeData=false&workflowId=' + $json.workflow_id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_PUBLIC_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        900,
+        40
+      ],
+      "name": "Get Last Executions",
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Build Exec Targets').item.json || {};\nconst body = $json || {};\nlet executions = [];\nif (Array.isArray(body.data)) executions = body.data;\nelse if (body.data && Array.isArray(body.data.data)) executions = body.data.data;\nconst forbidden = String(body.message || '').toLowerCase().includes('forbidden') || body.statusCode === 403;\nreturn {\n  json: {\n    workflow_id: ctx.workflow_id,\n    target: ctx.target,\n    registry: ctx.registry,\n    workflows: ctx.workflows,\n    workflowsOk: ctx.workflowsOk,\n    health: ctx.health,\n    meta: ctx.meta,\n    checked_at: ctx.checked_at,\n    started_ms: ctx.started_ms,\n    executions,\n    executions_available: !forbidden,\n    exec_error: body.message || null,\n  }\n};",
+        "mode": "runOnceForEachItem"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        40
+      ],
+      "name": "Attach Exec Meta"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nfunction severityFor(criticality, event) {\n  const crit = (criticality || 'medium').toLowerCase();\n  if (event === 'event_bus_unavailable') return 'critical';\n  const mapInactive = { critical: 'error', high: 'error', medium: 'warning', low: 'warning' };\n  const mapOverdue = { critical: 'error', high: 'error', medium: 'warning', low: 'info' };\n  if (event === 'workflow_unexpectedly_inactive') return mapInactive[crit] || 'warning';\n  if (event === 'workflow_execution_overdue') return mapOverdue[crit] || 'warning';\n  if (event === 'workflow_execution_failed') return mapInactive[crit] || 'warning';\n  if (['workflow_recovered','workflow_reactivated','event_bus_recovered'].includes(event)) return 'info';\n  return 'warning';\n}\n\nconst rows = $input.all().map(i => i.json);\nconst base = rows.find(r => r.registry) || rows[0] || {};\nconst REGISTRY = base.registry || { workflows: [], defaults: {} };\nconst defaults = REGISTRY.defaults || {};\nconst graceDefault = Number(defaults.grace_factor || 2.5);\nconst failErr = Number(defaults.failure_streak_error || 3);\nconst workflows = Array.isArray(base.workflows) ? base.workflows : [];\nconst workflowsOk = !!base.workflowsOk;\nconst byId = Object.fromEntries(workflows.map(w => [w.id, w]));\nconst meta = base.meta || {};\nconst prevFp = meta.last_fingerprints || {};\nconst health = base.health || {};\nconst now = new Date(base.checked_at || Date.now());\nconst checked_at = now.toISOString();\nconst started_ms = Number(base.started_ms || Date.now());\n\nconst execById = {};\nlet executionsAvailable = true;\nfor (const r of rows) {\n  if (!r.workflow_id) continue;\n  if (r.executions_available === false) executionsAvailable = false;\n  execById[r.workflow_id] = {\n    executions: Array.isArray(r.executions) ? r.executions : [],\n    available: r.executions_available !== false,\n  };\n}\n\nconst items = [];\nfor (const reg of (REGISTRY.workflows || [])) {\n  const wid = reg.workflow_id;\n  const live = wid ? byId[wid] : null;\n  const expected = reg.expected_state;\n  const crit = reg.criticality || 'medium';\n  const grace = Number(reg.grace_factor || graceDefault);\n  const intervalM = reg.expected_interval_minutes;\n  const intervalS = (intervalM == null) ? null : Math.round(Number(intervalM) * 60);\n  const bucket = wid ? execById[wid] : null;\n  const execs = bucket ? bucket.executions : [];\n  const latest = execs[0] || null;\n  let consec = 0;\n  for (const e of execs) {\n    if (['error','crashed','failed'].includes(e.status)) consec += 1;\n    else break;\n  }\n\n  const item = {\n    workflow_id: wid,\n    workflow_name: reg.name,\n    expected_state: expected,\n    actual_state: null,\n    last_execution_at: latest ? latest.startedAt : null,\n    last_execution_status: latest ? latest.status : null,\n    expected_interval_seconds: intervalS,\n    overdue: false,\n    consecutive_failures: consec,\n    health_status: 'unknown',\n    reason: null,\n    event: null,\n    severity: null,\n    should_emit: false,\n    route: 'event_bus',\n    fingerprint: null,\n    details: {\n      trigger_type: reg.trigger_type,\n      architectural_status: reg.architectural_status,\n      criticality: crit,\n      executions_available: bucket ? bucket.available : executionsAvailable,\n      known_limitation: !!reg.known_limitation,\n    },\n  };\n\n  if (expected === 'blocked' || ['BLOCKED_HARDWARE','DOCUMENTATION_ONLY'].includes(reg.architectural_status)) {\n    item.actual_state = 'blocked';\n    item.health_status = 'blocked_expected';\n    item.reason = reg.reason || 'known_limitation';\n    item.fingerprint = `${wid || reg.slug}|blocked_expected`;\n    items.push(item); continue;\n  }\n\n  if (expected === 'inactive') {\n    if (live && live.active === true) {\n      item.actual_state = 'active';\n      item.health_status = 'degraded';\n      item.reason = 'unexpectedly_active';\n      item.should_emit = false;\n      item.fingerprint = `${wid}|unexpectedly_active`;\n      items.push(item); continue;\n    }\n    item.actual_state = 'inactive';\n    item.health_status = 'inactive_expected';\n    item.reason = reg.reason || 'intentionally_inactive';\n    item.fingerprint = `${wid}|inactive_expected`;\n    items.push(item); continue;\n  }\n\n  if (!workflowsOk) {\n    item.health_status = 'unknown';\n    item.reason = 'workflow_list_unavailable';\n    item.fingerprint = `${wid}|unknown_list`;\n    items.push(item); continue;\n  }\n\n  if (!live) {\n    item.actual_state = 'missing';\n    item.health_status = 'failed';\n    item.reason = 'workflow_missing';\n    item.event = 'workflow_unexpectedly_inactive';\n    item.severity = severityFor(crit, item.event);\n    item.should_emit = true;\n    item.fingerprint = `${wid}|missing`;\n    items.push(item); continue;\n  }\n\n  if (live.active === false) {\n    item.actual_state = 'inactive';\n    item.health_status = 'failed';\n    item.reason = 'unexpectedly_inactive';\n    item.event = (reg.slug === '00-hestia-event-bus') ? 'event_bus_unavailable' : 'workflow_unexpectedly_inactive';\n    item.severity = severityFor(crit, item.event);\n    item.should_emit = true;\n    item.route = (item.event === 'event_bus_unavailable') ? 'break_glass' : 'event_bus';\n    item.fingerprint = `${wid}|${item.event}`;\n    items.push(item); continue;\n  }\n\n  item.actual_state = 'active';\n\n  if (consec >= failErr && latest && ['error','crashed','failed'].includes(latest.status)) {\n    item.health_status = 'failed';\n    item.reason = 'consecutive_failures';\n    item.event = 'workflow_execution_failed';\n    item.severity = severityFor(crit, item.event);\n    item.should_emit = true;\n    item.fingerprint = `${wid}|failed|${consec}`;\n    items.push(item); continue;\n  }\n\n  if (reg.heartbeat && reg.trigger_type === 'schedule' && intervalS) {\n    const avail = bucket ? bucket.available : executionsAvailable;\n    if (!avail) {\n      item.health_status = 'unknown';\n      item.reason = 'executions_api_unavailable';\n      item.fingerprint = `${wid}|unknown_executions`;\n      items.push(item); continue;\n    }\n    if (!latest || !latest.startedAt) {\n      // No execution ever — only overdue if expected to have run (interval elapsed since creation unknown).\n      // Treat as degraded/unknown without alerting on first observation window for brand-new workflows.\n      item.health_status = 'unknown';\n      item.reason = 'no_execution_metadata';\n      item.fingerprint = `${wid}|no_exec`;\n      items.push(item); continue;\n    }\n    const age = (now.getTime() - new Date(latest.startedAt).getTime()) / 1000;\n    const threshold = intervalS * grace;\n    if (age > threshold) {\n      item.overdue = true;\n      item.health_status = (crit === 'critical' || crit === 'high') ? 'failed' : 'degraded';\n      item.reason = 'execution_overdue';\n      item.event = 'workflow_execution_overdue';\n      item.severity = severityFor(crit, item.event);\n      item.should_emit = true;\n      item.details.age_seconds = Math.round(age);\n      item.details.threshold_seconds = Math.round(threshold);\n      item.fingerprint = `${wid}|overdue`;\n      items.push(item); continue;\n    }\n  }\n\n  const prev = prevFp[wid || reg.slug];\n  if (prev && prev.event && prev.health_status && ['failed','degraded'].includes(prev.health_status)) {\n    item.health_status = 'healthy';\n    item.reason = 'recovered';\n    item.event = prev.event === 'workflow_unexpectedly_inactive' ? 'workflow_reactivated'\n      : (prev.event === 'event_bus_unavailable' ? 'event_bus_recovered' : 'workflow_recovered');\n    item.severity = 'info';\n    item.should_emit = true;\n    item.route = item.event === 'event_bus_recovered' ? 'break_glass' : 'event_bus';\n    item.fingerprint = `${wid}|recovered|${item.event}`;\n    items.push(item); continue;\n  }\n\n  item.health_status = 'healthy';\n  item.reason = 'ok';\n  item.fingerprint = `${wid}|healthy`;\n  items.push(item);\n}\n\nconst severityRank = { info: 1, warning: 2, error: 3, critical: 4 };\nfor (const item of items) {\n  if (!item.should_emit) {\n    item.notification = { should_notify: false, reason: 'no_incident' };\n    continue;\n  }\n  const prev = prevFp[item.workflow_id] || prevFp[item.workflow_name];\n  if (!prev || !prev.fingerprint) {\n    item.notification = { should_notify: true, reason: 'first_incident' };\n    continue;\n  }\n  if (['workflow_recovered','workflow_reactivated','event_bus_recovered'].includes(item.event)) {\n    item.notification = { should_notify: true, reason: 'recovered' };\n    continue;\n  }\n  if (item.fingerprint === prev.fingerprint) {\n    if ((severityRank[item.severity] || 0) > (severityRank[prev.severity] || 0)) {\n      item.notification = { should_notify: true, reason: 'severity_escalated' };\n    } else {\n      item.should_emit = false;\n      item.notification = { should_notify: false, reason: 'no_change' };\n    }\n    continue;\n  }\n  item.notification = { should_notify: true, reason: 'incident_changed' };\n}\n\nconst snapshot = {\n  total_registered: items.length,\n  expected_active: (REGISTRY.workflows || []).filter(w => w.expected_state === 'active').length,\n  healthy: items.filter(i => i.health_status === 'healthy').length,\n  degraded: items.filter(i => i.health_status === 'degraded').length,\n  failed: items.filter(i => i.health_status === 'failed').length,\n  intentionally_inactive: items.filter(i => i.health_status === 'inactive_expected').length,\n  blocked: items.filter(i => i.health_status === 'blocked_expected').length,\n  unknown: items.filter(i => i.health_status === 'unknown').length,\n};\nlet overall = 'healthy';\nif (snapshot.failed || items.some(i => i.event === 'event_bus_unavailable')) overall = 'degraded';\nelse if (snapshot.degraded || snapshot.unknown) overall = 'attention';\n\nconst healthAgentOk = !!(health && (health.status === 'ok' || health.ok === true || health.status === 'healthy' || health.healthy === true || (!health._error && !health.message)));\nconst duration_ms = Date.now() - started_ms;\nconst fingerprints = {};\nfor (const i of items) {\n  fingerprints[i.workflow_id || i.workflow_name] = {\n    fingerprint: i.fingerprint,\n    event: i.event,\n    severity: i.severity,\n    health_status: i.health_status,\n  };\n}\n\nconst persist = items.map(i => ({ json: { kind: 'persist', checked_at, ...i } }));\nconst notify = items.filter(i => i.notification && i.notification.should_notify).map(i => {\n  const isBreak = i.route === 'break_glass';\n  const msg = i.event === 'event_bus_unavailable'\n    ? 'BREAK-GLASS: O Hestia Event Bus está inativo. A cadeia de alertas padrão pode estar indisponível.'\n    : `Automação OMEAB: ${i.event} — ${i.workflow_name} (${i.reason}).`;\n  return { json: {\n    kind: 'notify', should_emit: true, route: i.route,\n    source: 'omeab_self_health', component: 'automation',\n    event: i.event, severity: i.severity, status: i.health_status, timestamp: checked_at,\n    message: msg,\n    details: {\n      workflow_id: i.workflow_id, workflow_name: i.workflow_name, reason: i.reason,\n      consecutive_failures: i.consecutive_failures, overdue: i.overdue,\n      last_execution_at: i.last_execution_at, last_execution_status: i.last_execution_status,\n      notification_reason: i.notification.reason, break_glass_only: isBreak,\n    },\n    requires_attention: i.severity === 'error' || i.severity === 'critical',\n    suggested_action: isBreak\n      ? 'Verificar workflow 00 no n8n e entrega Hermes/Telegram. Não há auto-repair.'\n      : 'Investigar o workflow indicado. Self Health não reativa nem reexecuta automaticamente.',\n    alert: { text: msg },\n  }};\n});\nconst metaUpdate = [{ json: {\n  kind: 'meta', overall_status: overall,\n  last_snapshot: { ...snapshot, overall_status: overall, health_agent_ok: healthAgentOk,\n    workflows_api_ok: workflowsOk, executions_available: executionsAvailable, duration_ms, checked_at },\n  last_fingerprints: fingerprints,\n}}];\nreturn [...persist, ...metaUpdate, ...notify];\n",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1340,
+        40
+      ],
+      "name": "Evaluate Self Health"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "ac499754-d88a-4b67-820e-78cd9ff1d9ff",
+              "leftValue": "={{ $json.kind }}",
+              "rightValue": "persist",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [
+        1560,
+        -120
+      ],
+      "name": "Filter Persist"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "4038a700-a91a-4a06-b565-aac74ab5df11",
+              "leftValue": "={{ $json.kind }}",
+              "rightValue": "meta",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [
+        1560,
+        40
+      ],
+      "name": "Filter Meta"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "f6c61485-bda5-4231-8180-e3357f9764c5",
+              "leftValue": "={{ $json.kind }}",
+              "rightValue": "notify",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [
+        1560,
+        200
+      ],
+      "name": "Filter Notify"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{(() => { const esc=(v)=>String(v??'').replace(/'/g,\"''\"); const nul=(v)=>(v===null||v===undefined||v==='')?'NULL':`'${esc(v)}'`; const nulN=(v)=>(v===null||v===undefined||v==='')?'NULL':String(Number(v)); const details=JSON.stringify($json.details||{}).replace(/'/g,\"''\"); return `INSERT INTO automation_self_health_state (checked_at, workflow_id, workflow_name, expected_state, actual_state, last_execution_at, last_execution_status, expected_interval_seconds, overdue, consecutive_failures, health_status, reason, fingerprint, details) VALUES ('${esc($json.checked_at)}'::timestamptz, ${nul($json.workflow_id)}, '${esc($json.workflow_name)}', '${esc($json.expected_state)}', ${nul($json.actual_state)}, ${$json.last_execution_at ? `'${esc($json.last_execution_at)}'::timestamptz` : 'NULL'}, ${nul($json.last_execution_status)}, ${nulN($json.expected_interval_seconds)}, ${$json.overdue ? 'TRUE' : 'FALSE'}, ${Number($json.consecutive_failures||0)}, '${esc($json.health_status)}', ${nul($json.reason)}, ${nul($json.fingerprint)}, '${details}'::jsonb);`; })()}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1800,
+        -120
+      ],
+      "name": "Persist State",
+      "credentials": {
+        "postgres": {
+          "id": "{{CREDENTIAL_ID}}",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{(() => { const esc=(v)=>String(v??'').replace(/'/g,\"''\"); const snap=JSON.stringify($json.last_snapshot||{}).replace(/'/g,\"''\"); const fps=JSON.stringify($json.last_fingerprints||{}).replace(/'/g,\"''\"); return `UPDATE automation_self_health_meta SET last_snapshot='${snap}'::jsonb, last_fingerprints='${fps}'::jsonb, overall_status='${esc($json.overall_status)}', updated_at=now() WHERE id=1;`; })()}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1800,
+        40
+      ],
+      "name": "Update Meta",
+      "credentials": {
+        "postgres": {
+          "id": "{{CREDENTIAL_ID}}",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "2282412c-03df-4572-9749-547f18b03eac",
+              "leftValue": "={{ $json.route }}",
+              "rightValue": "break_glass",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1800,
+        200
+      ],
+      "name": "Is Break Glass?"
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst event = $json;\nconst secret = $env.HESTIA_WEBHOOK_SECRET;\nif (!secret) return [{ json: { ...event, break_glass_error: 'HESTIA_WEBHOOK_SECRET missing', skip_break_glass: true } }];\nconst body = JSON.stringify({ alert: { text: '[BREAK_GLASS_ONLY] ' + (event.alert?.text || event.message || 'automation chain issue') } });\nconst timestamp = String(Math.floor(Date.now() / 1000));\nconst signature = crypto.createHmac('sha256', secret).update(`${timestamp}.${body}`, 'utf8').digest('hex');\nreturn [{ json: { ...event, hermes_request: { body, timestamp, signature } } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2040,
+        120
+      ],
+      "name": "Generate Break-Glass HMAC"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "{{$env.HERMES_URL}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Webhook-Timestamp",
+              "value": "={{ $json.hermes_request.timestamp }}"
+            },
+            {
+              "name": "X-Webhook-Signature-V2",
+              "value": "={{ $json.hermes_request.signature }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.hermes_request.body }}",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2280,
+        120
+      ],
+      "name": "Break-Glass to Hermes",
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "{{$env.N8N_WEBHOOK_BASE}}/webhook/hestia-event",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ source: $json.source, severity: $json.severity, component: $json.component, event: $json.event, status: $json.status, timestamp: $json.timestamp, message: $json.message, details: $json.details, requires_attention: $json.requires_attention, suggested_action: $json.suggested_action }) }}",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2040,
+        280
+      ],
+      "name": "Send to Hestia Event Bus",
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        200
+      ],
+      "name": "Manual Trigger"
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get Health Agent",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "List n8n Workflows",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Self Health Meta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Health Agent": {
+      "main": [
+        [
+          {
+            "node": "Merge Inputs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List n8n Workflows": {
+      "main": [
+        [
+          {
+            "node": "Merge Inputs",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Get Self Health Meta": {
+      "main": [
+        [
+          {
+            "node": "Merge Inputs",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Merge Inputs": {
+      "main": [
+        [
+          {
+            "node": "Build Exec Targets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Exec Targets": {
+      "main": [
+        [
+          {
+            "node": "Get Last Executions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Last Executions": {
+      "main": [
+        [
+          {
+            "node": "Attach Exec Meta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach Exec Meta": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Self Health",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Self Health": {
+      "main": [
+        [
+          {
+            "node": "Filter Persist",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Filter Meta",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Filter Notify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Persist": {
+      "main": [
+        [
+          {
+            "node": "Persist State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Meta": {
+      "main": [
+        [
+          {
+            "node": "Update Meta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Notify": {
+      "main": [
+        [
+          {
+            "node": "Is Break Glass?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Break Glass?": {
+      "main": [
+        [
+          {
+            "node": "Generate Break-Glass HMAC",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send to Hestia Event Bus",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Break-Glass HMAC": {
+      "main": [
+        [
+          {
+            "node": "Break-Glass to Hermes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get Health Agent",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "List n8n Workflows",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Self Health Meta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "meta": {
+    "templateSource": "VinyLab-Automation-Hub",
+    "sanitized": true
+  },
+  "pinData": {},
+  "active": false
+}

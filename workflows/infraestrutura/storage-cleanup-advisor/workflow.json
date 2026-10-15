@@ -1,0 +1,330 @@
+{
+  "name": "15 - STORAGE CLEANUP ADVISOR",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 7 * * *"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ],
+      "name": "Daily Schedule"
+    },
+    {
+      "parameters": {
+        "url": "{{$env.SERVICE_BASE_URL}}/v1/storage-analysis",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.OMEAB_HEALTH_TOKEN }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        240,
+        0
+      ],
+      "name": "Get Storage Analysis",
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT checked_at, disk_snapshot, category_snapshot, estimated_low_risk_bytes, estimated_review_bytes, protected_bytes, overall_status, recommendation, fingerprint, details FROM storage_cleanup_advisor_state ORDER BY checked_at DESC LIMIT 1;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        240,
+        160
+      ],
+      "name": "Get Previous Snapshot",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "{{CREDENTIAL_ID}}",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT last_fingerprint, last_recommendation, last_overall_status FROM storage_cleanup_advisor_meta WHERE id = 1;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        240,
+        320
+      ],
+      "name": "Get Advisor Meta",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "{{CREDENTIAL_ID}}",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 3,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        480,
+        80
+      ],
+      "name": "Wait Context"
+    },
+    {
+      "parameters": {
+        "jsCode": "function safe(name) {\n  try { return $(name).first().json || {}; } catch (e) { return { _error: true, _message: String(e.message || e) }; }\n}\n\nconst analysis = safe('Get Storage Analysis');\nconst prev = safe('Get Previous Snapshot');\nconst meta = safe('Get Advisor Meta');\nconst now = new Date().toISOString();\n\nif (analysis._error || !analysis.checked_at) {\n  return [{\n    json: {\n      should_emit: false,\n      skip_persist: true,\n      error: analysis._message || 'storage_analysis_unavailable',\n    },\n  }];\n}\n\n// Optional growth recompute if agent didn't get previous (agent call is without previous)\nconst GB = 1000 ** 3;\nconst prevCats = Array.isArray(prev.category_snapshot) ? prev.category_snapshot : [];\nconst prevMap = {};\nfor (const c of prevCats) {\n  if (c && c.category) prevMap[c.category] = Number(c.bytes || 0);\n}\nconst growth = [];\nfor (const c of (analysis.categories || [])) {\n  const prevB = prevMap[c.category];\n  if (prevB === undefined || prevB === null) continue;\n  const curB = Number(c.bytes || 0);\n  const delta = curB - prevB;\n  if (delta >= 2 * GB || (prevB > 0 && curB >= 4 * prevB && delta >= 500 * 1000 * 1000)) {\n    growth.push({ category: c.category, previous_bytes: prevB, current_bytes: curB, delta_bytes: delta });\n  }\n}\n\nlet recommendation = analysis.recommendation || 'no_action';\nlet overall = analysis.overall_status || 'healthy';\nlet severity = 'info';\nlet eventName = null;\n\nif (growth.length) {\n  recommendation = 'investigate_growth';\n  if (overall === 'healthy') overall = 'attention';\n  eventName = 'storage_growth_detected';\n  severity = 'warning';\n}\n\nconst low = Number(analysis.estimated_reclaimable_low_risk_bytes || 0);\nconst review = Number(analysis.estimated_reclaimable_review_bytes || 0);\nconst fingerprint = [\n  recommendation,\n  overall,\n  String(low),\n  String(review),\n  String(analysis.disk_pressure || ''),\n  growth.map((g) => g.category + ':' + g.delta_bytes).join(','),\n].join('|');\n\nconst prevFp = meta.last_fingerprint || prev.fingerprint || null;\nlet should_emit = false;\nif (!prevFp) {\n  // first run: emit only if actionable\n  if (recommendation !== 'no_action' || low >= GB || review >= GB || growth.length) {\n    should_emit = true;\n    eventName = eventName || (growth.length ? 'storage_growth_detected' : 'cleanup_opportunity_detected');\n  }\n} else if (prevFp !== fingerprint) {\n  should_emit = true;\n  if (!eventName) {\n    if (meta.last_recommendation && meta.last_recommendation !== recommendation) {\n      eventName = 'cleanup_recommendation_changed';\n      severity = 'warning';\n    } else if (growth.length) {\n      eventName = 'storage_growth_detected';\n      severity = 'warning';\n    } else {\n      eventName = 'cleanup_opportunity_detected';\n      severity = recommendation === 'no_action' ? 'info' : 'info';\n    }\n  }\n}\n\n// sanitize categories for persistence/events — no paths beyond category names\nconst category_snapshot = (analysis.categories || []).map((c) => ({\n  category: c.category,\n  bytes: c.bytes ?? null,\n  candidate: !!c.candidate,\n  risk: c.risk,\n  confidence: c.confidence,\n  recommendation: c.recommendation,\n  protected: !!c.protected,\n  status: c.status,\n}));\n\nconst disk_snapshot = analysis.disk_snapshot || {};\n\nreturn [{\n  json: {\n    should_emit,\n    skip_persist: false,\n    checked_at: analysis.checked_at || now,\n    disk_snapshot,\n    category_snapshot,\n    estimated_low_risk_bytes: low,\n    estimated_review_bytes: review,\n    protected_bytes: Number(analysis.protected_bytes || 0),\n    overall_status: overall,\n    recommendation,\n    fingerprint,\n    details: {\n      disk_pressure: analysis.disk_pressure,\n      worst_used_percent: analysis.worst_used_percent,\n      growth,\n      partial: !!analysis.partial,\n      execution_ms: analysis.execution_ms,\n      advisory_only: true,\n      executed_cleanup: false,\n    },\n    event: should_emit ? {\n      source: 'storage_cleanup_advisor',\n      severity,\n      component: 'storage',\n      event: eventName || 'cleanup_opportunity_detected',\n      status: overall,\n      timestamp: now,\n      message: `Análise de armazenamento: ${recommendation}. low_risk≈${(low/GB).toFixed(1)}GB review≈${(review/GB).toFixed(1)}GB. Nenhuma remoção foi realizada.`,\n      details: {\n        estimated_low_risk_bytes: low,\n        estimated_review_bytes: review,\n        protected_bytes: Number(analysis.protected_bytes || 0),\n        recommendation,\n        overall_status: overall,\n        disk_pressure: analysis.disk_pressure,\n        worst_used_percent: analysis.worst_used_percent,\n        growth,\n        categories: category_snapshot.filter((c) => c.candidate || c.protected).map((c) => ({\n          category: c.category, bytes: c.bytes, risk: c.risk, candidate: c.candidate, protected: c.protected,\n        })),\n        advisory_only: true,\n        executed_cleanup: false,\n      },\n      requires_attention: severity !== 'info',\n      suggested_action: recommendation === 'no_action' ? null : 'Revisar recomendações; não executar cleanup automático.',\n      correlation_id: `storage-cleanup:${eventName || 'opportunity'}`,\n    } : null,\n    meta_update: {\n      last_fingerprint: fingerprint,\n      last_recommendation: recommendation,\n      last_overall_status: overall,\n    },\n  },\n}];",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        80
+      ],
+      "name": "Evaluate Growth And Dedup"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{\n(() => {\n  if ($json.skip_persist) return 'SELECT 1 AS skipped;';\n  const esc = (v) => String(v ?? '').replace(/'/g, \"''\");\n  const disk = JSON.stringify($json.disk_snapshot || {}).replace(/'/g, \"''\");\n  const cats = JSON.stringify($json.category_snapshot || []).replace(/'/g, \"''\");\n  const details = JSON.stringify($json.details || {}).replace(/'/g, \"''\");\n  const nul = (v) => (v === null || v === undefined) ? 'NULL' : String(Number(v));\n  return `\nINSERT INTO storage_cleanup_advisor_state (\n  checked_at, disk_snapshot, category_snapshot,\n  estimated_low_risk_bytes, estimated_review_bytes, protected_bytes,\n  overall_status, recommendation, fingerprint, details\n) VALUES (\n  '${esc($json.checked_at)}'::timestamptz,\n  '${disk}'::jsonb,\n  '${cats}'::jsonb,\n  ${nul($json.estimated_low_risk_bytes)},\n  ${nul($json.estimated_review_bytes)},\n  ${nul($json.protected_bytes)},\n  '${esc($json.overall_status)}',\n  '${esc($json.recommendation)}',\n  '${esc($json.fingerprint)}',\n  '${details}'::jsonb\n);`;\n})()\n}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        940,
+        0
+      ],
+      "name": "Persist Snapshot",
+      "credentials": {
+        "postgres": {
+          "id": "{{CREDENTIAL_ID}}",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{\n(() => {\n  if ($json.skip_persist) return 'SELECT 1 AS skipped_meta;';\n  const esc = (v) => String(v ?? '').replace(/'/g, \"''\");\n  const m = $json.meta_update || {};\n  return `\nUPDATE storage_cleanup_advisor_meta SET\n  last_fingerprint = '${esc(m.last_fingerprint)}',\n  last_recommendation = '${esc(m.last_recommendation)}',\n  last_overall_status = '${esc(m.last_overall_status)}',\n  updated_at = now()\nWHERE id = 1;`;\n})()\n}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        940,
+        160
+      ],
+      "name": "Upsert Meta",
+      "credentials": {
+        "postgres": {
+          "id": "{{CREDENTIAL_ID}}",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.should_emit }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        940,
+        320
+      ],
+      "name": "Should Notify?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "{{$env.N8N_WEBHOOK_BASE}}/webhook/hestia-event",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.event }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1180,
+        260
+      ],
+      "name": "Send to Hestia Event Bus",
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    }
+  ],
+  "connections": {
+    "Daily Schedule": {
+      "main": [
+        [
+          {
+            "node": "Get Storage Analysis",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Previous Snapshot",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Advisor Meta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Storage Analysis": {
+      "main": [
+        [
+          {
+            "node": "Wait Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Previous Snapshot": {
+      "main": [
+        [
+          {
+            "node": "Wait Context",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Get Advisor Meta": {
+      "main": [
+        [
+          {
+            "node": "Wait Context",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Wait Context": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Growth And Dedup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Growth And Dedup": {
+      "main": [
+        [
+          {
+            "node": "Persist Snapshot",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Upsert Meta",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Should Notify?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Notify?": {
+      "main": [
+        [
+          {
+            "node": "Send to Hestia Event Bus",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "meta": {
+    "templateSource": "VinyLab-Automation-Hub",
+    "sanitized": true
+  },
+  "pinData": {},
+  "active": false
+}

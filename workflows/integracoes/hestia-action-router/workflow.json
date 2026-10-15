@@ -1,0 +1,1346 @@
+{
+  "name": "13 - HESTIA ACTION ROUTER",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "hestia-action",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "name": "Webhook",
+      "webhookId": "{{WEBHOOK_ID}}"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT COUNT(*)::int AS recent_count FROM hestia_action_audit WHERE received_at > NOW() - INTERVAL '1 minute';",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        224,
+        0
+      ],
+      "name": "Rate Limit Check",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "{{CREDENTIAL_ID}}",
+          "name": "Postgres account"
+        }
+      },
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\n\nconst REPLAY_WINDOW_SEC = 300;\nconst RATE_LIMIT_PER_MIN = 30;\nconst ALLOWED_RISKS = new Set(['READ']);\n\nconst REGISTRY = {\n  'system.status': {\n    description: 'Estado geral do OMEAB (CPU/RAM/uptime/load).',\n    risk: 'READ',\n    enabled: true,\n    requires_confirmation: false,\n    parameter_schema: { type: 'object', additionalProperties: false, properties: {} },\n    executor: 'system.status',\n    timeout_ms: 10000,\n    audit: true,\n  },\n  'storage.status': {\n    description: 'Estado do volume /srv/storage.',\n    risk: 'READ',\n    enabled: true,\n    requires_confirmation: false,\n    parameter_schema: { type: 'object', additionalProperties: false, properties: {} },\n    executor: 'storage.status',\n    timeout_ms: 10000,\n    audit: true,\n  },\n  'backup.status': {\n    description: 'Estado compacto dos backups (sem iniciar backup).',\n    risk: 'READ',\n    enabled: true,\n    requires_confirmation: false,\n    parameter_schema: { type: 'object', additionalProperties: false, properties: {} },\n    executor: 'backup.status',\n    timeout_ms: 10000,\n    audit: true,\n  },\n  'docker.status': {\n    description: 'Estado READ-ONLY dos containers Docker.',\n    risk: 'READ',\n    enabled: true,\n    requires_confirmation: false,\n    parameter_schema: { type: 'object', additionalProperties: false, properties: {} },\n    executor: 'docker.status',\n    timeout_ms: 10000,\n    audit: true,\n  },\n  'disk.status': {\n    description: 'Uso agregado dos mounts monitorados.',\n    risk: 'READ',\n    enabled: true,\n    requires_confirmation: false,\n    parameter_schema: { type: 'object', additionalProperties: false, properties: {} },\n    executor: 'disk.status',\n    timeout_ms: 10000,\n    audit: true,\n  },\n  'immich.status': {\n    description: 'Snapshot operacional Immich (sem fotos/faces/GPS).',\n    risk: 'READ',\n    enabled: true,\n    requires_confirmation: false,\n    parameter_schema: { type: 'object', additionalProperties: false, properties: {} },\n    executor: 'immich.status',\n    timeout_ms: 10000,\n    audit: true,\n  },\n  'rag.stats': {\n    description: 'Estatísticas agregadas do omeab-rag (sem conteúdo).',\n    risk: 'READ',\n    enabled: true,\n    requires_confirmation: false,\n    parameter_schema: { type: 'object', additionalProperties: false, properties: {} },\n    executor: 'rag.stats',\n    timeout_ms: 10000,\n    audit: true,\n  },\n  'audiobook.stats': {\n    description: 'Contadores agregados do audiobook-factory.',\n    risk: 'READ',\n    enabled: true,\n    requires_confirmation: false,\n    parameter_schema: { type: 'object', additionalProperties: false, properties: {} },\n    executor: 'audiobook.stats',\n    timeout_ms: 10000,\n    audit: true,\n  },\n  'media.stats': {\n    description: 'Métricas agregadas do omeab-media-manager.',\n    risk: 'READ',\n    enabled: true,\n    requires_confirmation: false,\n    parameter_schema: { type: 'object', additionalProperties: false, properties: {} },\n    executor: 'media.stats',\n    timeout_ms: 10000,\n    audit: true,\n  },\n};\n\nconst FORBIDDEN_PARAM_KEYS = new Set([\n  'url', 'host', 'port', 'protocol', 'command', 'shell', 'sql', 'query',\n  'path', 'script', 'exec', 'docker', 'ssh', 'rm', 'compose', 'endpoint',\n]);\n\nconst UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;\nconst startedMs = Date.now();\nconst receivedAt = new Date().toISOString();\n\nconst item = $('Webhook').first();\nconst headersIn = item.json.headers || {};\nconst headers = {};\nfor (const [k, v] of Object.entries(headersIn)) {\n  headers[String(k).toLowerCase()] = v;\n}\n\nlet rawBody = '';\ntry {\n  if (item.binary && item.binary.data && item.binary.data.data) {\n    rawBody = Buffer.from(item.binary.data.data, 'base64').toString('utf8');\n  }\n} catch (e) {\n  rawBody = '';\n}\n\nlet body = {};\nif (rawBody) {\n  try {\n    body = JSON.parse(rawBody);\n  } catch (e) {\n    body = null;\n  }\n} else {\n  body = item.json.body ?? item.json;\n  rawBody = JSON.stringify(body ?? {});\n}\n\nfunction reject(httpStatus, errorCode, message, extra = {}) {\n  const requestId = (body && typeof body === 'object' && body.request_id) ? String(body.request_id) : null;\n  const action = (body && typeof body === 'object' && body.action) ? String(body.action) : 'unknown';\n  const securityCodes = new Set([\n    'INVALID_SIGNATURE', 'REQUEST_EXPIRED', 'REPLAY_DETECTED',\n    'ACTION_NOT_ALLOWED', 'INVALID_PARAMETERS', 'RATE_LIMITED',\n  ]);\n  const response = {\n    request_id: requestId,\n    action,\n    status: 'rejected',\n    executed: false,\n    requires_confirmation: false,\n    message,\n    data: {},\n    error_code: errorCode,\n    started_at: new Date(startedMs).toISOString(),\n    finished_at: new Date().toISOString(),\n    ...extra,\n  };\n  return [{\n    json: {\n      gate: 'reject',\n      http_status: httpStatus,\n      security_event: securityCodes.has(errorCode),\n      security_event_name: errorCode.toLowerCase(),\n      audit: {\n        request_id: requestId,\n        requested_at: body && body.requested_at ? String(body.requested_at) : null,\n        requested_by: body && body.requested_by ? String(body.requested_by).slice(0, 100) : null,\n        action: action.slice(0, 150),\n        risk: 'READ',\n        parameters: {},\n        status: 'rejected',\n        executed: false,\n        requires_confirmation: false,\n        result_summary: { error_code: errorCode },\n        error_code: errorCode,\n        duration_ms: Date.now() - startedMs,\n        received_at: receivedAt,\n      },\n      response,\n      registry_action: null,\n    },\n  }];\n}\n\nconst secret = $env.HESTIA_ACTION_SECRET;\nif (!secret) {\n  return reject(500, 'ROUTER_MISCONFIGURED', 'Action Router secret unavailable.');\n}\n\nif (body === null || typeof body !== 'object' || Array.isArray(body)) {\n  return reject(400, 'INVALID_CONTRACT', 'Body JSON inválido.');\n}\n\nconst tsHeader = headers['x-hestia-action-timestamp'];\nconst sigHeader = headers['x-hestia-action-signature'];\nif (!tsHeader || !sigHeader) {\n  return reject(401, 'INVALID_SIGNATURE', 'Assinatura ou timestamp ausente.');\n}\n\nconst tsNum = Number(tsHeader);\nif (!Number.isFinite(tsNum) || !/^\\d+$/.test(String(tsHeader))) {\n  return reject(401, 'INVALID_SIGNATURE', 'Timestamp inválido.');\n}\n\nconst nowSec = Math.floor(Date.now() / 1000);\nif (Math.abs(nowSec - tsNum) > REPLAY_WINDOW_SEC) {\n  return reject(401, 'REQUEST_EXPIRED', 'Timestamp fora da janela de replay.');\n}\n\nconst canonical = `${String(tsHeader)}.${rawBody}`;\nconst expected = crypto.createHmac('sha256', secret).update(canonical, 'utf8').digest('hex');\nconst provided = String(sigHeader).toLowerCase().trim();\nconst a = Buffer.from(expected, 'utf8');\nconst b = Buffer.from(provided, 'utf8');\nif (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {\n  return reject(401, 'INVALID_SIGNATURE', 'Assinatura HMAC inválida.');\n}\n\n// Rate limit from previous node\nlet recentCount = 0;\ntry {\n  const rateRows = $('Rate Limit Check').all().map((i) => i.json);\n  const row = rateRows.find((r) => r.recent_count != null) || rateRows[0] || {};\n  recentCount = Number(row.recent_count || 0);\n} catch (e) {\n  recentCount = 0;\n}\nif (recentCount >= RATE_LIMIT_PER_MIN) {\n  return reject(429, 'RATE_LIMITED', 'Limite de requisições excedido.');\n}\n\nconst version = String(body.version || '');\nif (version !== '1.0') {\n  return reject(400, 'INVALID_CONTRACT', 'version deve ser \"1.0\".');\n}\n\nconst requestId = String(body.request_id || '');\nif (!UUID_RE.test(requestId)) {\n  return reject(400, 'INVALID_CONTRACT', 'request_id UUID inválido.');\n}\n\nif (!body.requested_at || Number.isNaN(Date.parse(String(body.requested_at)))) {\n  return reject(400, 'INVALID_CONTRACT', 'requested_at inválido.');\n}\n\nconst action = String(body.action || '');\nif (!action || action.length > 100) {\n  return reject(400, 'INVALID_CONTRACT', 'action inválida.');\n}\n\nconst parameters = body.parameters;\nif (parameters === undefined || parameters === null) {\n  return reject(400, 'INVALID_PARAMETERS', 'parameters obrigatório (objeto, pode ser vazio).');\n}\nif (typeof parameters !== 'object' || Array.isArray(parameters)) {\n  return reject(400, 'INVALID_PARAMETERS', 'parameters deve ser objeto.');\n}\n\nfor (const key of Object.keys(parameters)) {\n  if (FORBIDDEN_PARAM_KEYS.has(String(key).toLowerCase())) {\n    return reject(400, 'INVALID_PARAMETERS', `Parâmetro proibido: ${key}`);\n  }\n}\n\nconst meta = REGISTRY[action];\nif (!meta) {\n  return reject(403, 'ACTION_NOT_ALLOWED', 'Action não permitida.');\n}\nif (!meta.enabled) {\n  return reject(403, 'ACTION_NOT_ALLOWED', 'Action desabilitada.');\n}\nif (!ALLOWED_RISKS.has(meta.risk)) {\n  return reject(403, 'ACTION_NOT_ALLOWED', 'Risk level não autorizado nesta versão.');\n}\n\nconst paramKeys = Object.keys(parameters);\nif (paramKeys.length > 0) {\n  // V1: todas as actions READ exigem parameters vazios\n  return reject(400, 'INVALID_PARAMETERS', 'Esta action não aceita parameters.');\n}\n\nif (meta.requires_confirmation) {\n  const confirmationId = crypto.randomUUID();\n  const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();\n  const paramsHash = crypto.createHash('sha256').update(JSON.stringify(parameters)).digest('hex');\n  const response = {\n    request_id: requestId,\n    action,\n    status: 'confirmation_required',\n    executed: false,\n    requires_confirmation: true,\n    confirmation_id: confirmationId,\n    expires_at: expiresAt,\n    message: 'Confirmação necessária antes da execução.',\n    data: {\n      action,\n      parameters_hash: paramsHash,\n      risk: meta.risk,\n    },\n    started_at: new Date(startedMs).toISOString(),\n    finished_at: new Date().toISOString(),\n  };\n  return [{\n    json: {\n      gate: 'confirm',\n      http_status: 202,\n      security_event: false,\n      audit: {\n        request_id: requestId,\n        requested_at: String(body.requested_at),\n        requested_by: String(body.requested_by || 'unknown').slice(0, 100),\n        action,\n        risk: meta.risk,\n        parameters: {},\n        status: 'confirmation_required',\n        executed: false,\n        requires_confirmation: true,\n        result_summary: { confirmation_id: confirmationId, expires_at: expiresAt, parameters_hash: paramsHash },\n        error_code: null,\n        duration_ms: Date.now() - startedMs,\n        received_at: receivedAt,\n      },\n      response,\n      registry_action: action,\n    },\n  }];\n}\n\nreturn [{\n  json: {\n    gate: 'execute',\n    http_status: 200,\n    security_event: false,\n    registry_action: action,\n    executor: meta.executor,\n    risk: meta.risk,\n    timeout_ms: meta.timeout_ms,\n    request_id: requestId,\n    requested_at: String(body.requested_at),\n    requested_by: String(body.requested_by || 'unknown').slice(0, 100),\n    parameters: {},\n    received_at: receivedAt,\n    started_ms: startedMs,\n    // SQL-safe literals for subsequent Postgres nodes\n    sql_request_id: requestId,\n    sql_requested_at: String(body.requested_at).replace(/'/g, \"''\"),\n    sql_requested_by: String(body.requested_by || 'unknown').slice(0, 100).replace(/'/g, \"''\"),\n    sql_action: action.replace(/'/g, \"''\"),\n    sql_risk: meta.risk.replace(/'/g, \"''\"),\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        0
+      ],
+      "name": "Auth Validate Policy"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c81fb6da-d8bd-5ed5-ab1f-42abae61248e",
+              "leftValue": "={{ $json.gate }}",
+              "rightValue": "execute",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        688,
+        0
+      ],
+      "name": "Should Execute?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "{{\n(() => {\n  const auth = $('Auth Validate Policy').first().json;\n  const a = auth.audit || {};\n  if (auth.skip_audit_insert) {\n    return `SELECT 1 AS skipped_replay_audit;`;\n  }\n  const rid = String(a.request_id || '').replace(/'/g, \"''\");\n  if (!rid || !/^[0-9a-fA-F-]{36}$/.test(rid)) {\n    return `SELECT 1 AS skipped_no_request_id;`;\n  }\n  const action = String(a.action || 'unknown').replace(/'/g, \"''\").slice(0, 150);\n  const risk = String(a.risk || 'READ').replace(/'/g, \"''\");\n  const status = String(a.status || 'rejected').replace(/'/g, \"''\");\n  const err = a.error_code ? String(a.error_code).replace(/'/g, \"''\") : null;\n  const requestedBy = a.requested_by ? String(a.requested_by).replace(/'/g, \"''\") : null;\n  const requestedAt = a.requested_at ? String(a.requested_at).replace(/'/g, \"''\") : null;\n  const receivedAt = a.received_at ? String(a.received_at).replace(/'/g, \"''\") : null;\n  const params = JSON.stringify(a.parameters || {}).replace(/'/g, \"''\");\n  const summary = JSON.stringify(a.result_summary || {}).replace(/'/g, \"''\");\n  const duration = Number.isFinite(Number(a.duration_ms)) ? Number(a.duration_ms) : 'NULL';\n  const executed = a.executed ? 'true' : 'false';\n  const conf = a.requires_confirmation ? 'true' : 'false';\n  return `\nINSERT INTO hestia_action_audit (\n  request_id, requested_at, received_at, requested_by, action, risk, parameters,\n  status, executed, requires_confirmation, result_summary, error_code, duration_ms\n) VALUES (\n  '${rid}'::uuid,\n  ${requestedAt ? `'${requestedAt}'::timestamptz` : 'NULL'},\n  ${receivedAt ? `'${receivedAt}'::timestamptz` : 'now()'},\n  ${requestedBy ? `'${requestedBy}'` : 'NULL'},\n  '${action}',\n  '${risk}',\n  '${params}'::jsonb,\n  '${status}',\n  ${executed},\n  ${conf},\n  '${summary}'::jsonb,\n  ${err ? `'${err}'` : 'NULL'},\n  ${duration}\n)\nON CONFLICT (request_id) DO UPDATE SET\n  status = EXCLUDED.status,\n  executed = EXCLUDED.executed,\n  result_summary = EXCLUDED.result_summary,\n  error_code = EXCLUDED.error_code,\n  duration_ms = EXCLUDED.duration_ms;\n`;\n})()\n}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        928,
+        272
+      ],
+      "name": "Audit Reject",
+      "credentials": {
+        "postgres": {
+          "id": "{{CREDENTIAL_ID}}",
+          "name": "Postgres account"
+        }
+      },
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($('Auth Validate Policy').first().json.response) }}",
+        "options": {
+          "responseCode": "={{ Number($('Auth Validate Policy').first().json.http_status || 400) }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1152,
+        272
+      ],
+      "name": "Respond Reject"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "{{\n(() => {\n  const auth = $('Auth Validate Policy').first().json;\n  const name = String(auth.security_event_name || 'security').replace(/'/g, \"''\");\n  return `SELECT COUNT(*)::int AS recent_security FROM hestia_events WHERE source = 'hestia_action_router' AND component = 'security' AND event = '${name}' AND received_at > NOW() - INTERVAL '5 minutes';`;\n})()\n}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        928,
+        432
+      ],
+      "name": "Security Dedup Check",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "{{CREDENTIAL_ID}}",
+          "name": "Postgres account"
+        }
+      },
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "{{\n`INSERT INTO hestia_action_audit (\n  request_id, requested_at, received_at, requested_by, action, risk, parameters,\n  status, executed, requires_confirmation, result_summary\n) VALUES (\n  '${$json.sql_request_id}'::uuid,\n  '${$json.sql_requested_at}'::timestamptz,\n  '${String($json.received_at).replace(/'/g, \"''\")}'::timestamptz,\n  '${$json.sql_requested_by}',\n  '${$json.sql_action}',\n  '${$json.sql_risk}',\n  '{}'::jsonb,\n  'received',\n  false,\n  false,\n  '{}'::jsonb\n)\nON CONFLICT (request_id) DO NOTHING\nRETURNING id, request_id, true AS inserted;`\n}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        928,
+        -128
+      ],
+      "name": "Reserve Request",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "{{CREDENTIAL_ID}}",
+          "name": "Postgres account"
+        }
+      },
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Auth Validate Policy').first().json;\nconst rows = $input.all().map((i) => i.json).filter(Boolean);\nconst inserted = rows.find((r) => r && (r.id != null || r.inserted === true || r.request_id));\n\nconst ok = !!(inserted && (inserted.id != null || inserted.inserted === true));\n\nif (!ok) {\n  const startedMs = Number(ctx.started_ms || Date.now());\n  const response = {\n    request_id: ctx.request_id,\n    action: ctx.registry_action,\n    status: 'rejected',\n    executed: false,\n    requires_confirmation: false,\n    message: 'Replay detectado.',\n    data: {},\n    error_code: 'REPLAY_DETECTED',\n    started_at: new Date(startedMs).toISOString(),\n    finished_at: new Date().toISOString(),\n  };\n  return [{\n    json: {\n      gate: 'reject',\n      http_status: 409,\n      security_event: true,\n      security_event_name: 'replay_detected',\n      skip_audit_insert: true,\n      audit: {\n        request_id: ctx.request_id,\n        action: ctx.registry_action,\n        status: 'rejected',\n        executed: false,\n        error_code: 'REPLAY_DETECTED',\n        duration_ms: Date.now() - startedMs,\n      },\n      response,\n    },\n  }];\n}\n\nreturn [{\n  json: {\n    ...ctx,\n    gate: 'execute',\n    audit_reserved: true,\n    reserved_id: inserted.id ?? null,\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1152,
+        -128
+      ],
+      "name": "Replay Gate"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "7972ef66-1a36-57c9-8554-e60b5ac80490",
+              "leftValue": "={{ $json.gate }}",
+              "rightValue": "execute",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1360,
+        -128
+      ],
+      "name": "Not Replay?"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "857caa39-0dfd-5115-b5dd-81eed2836c6b",
+                    "leftValue": "={{ $json.registry_action }}",
+                    "rightValue": "system.status",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "system.status"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "36ffaa48-7e74-5ae2-a123-12981011759b",
+                    "leftValue": "={{ $json.registry_action }}",
+                    "rightValue": "storage.status",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "storage.status"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "d52b207d-6c28-556c-951f-b114bf1a0209",
+                    "leftValue": "={{ $json.registry_action }}",
+                    "rightValue": "backup.status",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "backup.status"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "9d1b3352-e89c-50ec-a36e-cf949f028832",
+                    "leftValue": "={{ $json.registry_action }}",
+                    "rightValue": "docker.status",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "docker.status"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "dacc962c-6917-5c50-99ac-f98521118519",
+                    "leftValue": "={{ $json.registry_action }}",
+                    "rightValue": "disk.status",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "disk.status"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "c94a04fb-25df-5e71-bfc8-ceff478a3501",
+                    "leftValue": "={{ $json.registry_action }}",
+                    "rightValue": "immich.status",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "immich.status"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "919ccf8d-1d22-5387-8177-887ec3904e60",
+                    "leftValue": "={{ $json.registry_action }}",
+                    "rightValue": "rag.stats",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "rag.stats"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "3a53d10d-5143-5da9-8f89-9b27527f79ad",
+                    "leftValue": "={{ $json.registry_action }}",
+                    "rightValue": "audiobook.stats",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "audiobook.stats"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "1912391b-e97d-5398-ba07-c6540e55df68",
+                    "leftValue": "={{ $json.registry_action }}",
+                    "rightValue": "media.stats",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "media.stats"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        1552,
+        -464
+      ],
+      "name": "Resolve Action"
+    },
+    {
+      "parameters": {
+        "url": "{{$env.SERVICE_BASE_URL}}/v1/system",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.OMEAB_HEALTH_TOKEN }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1872,
+        -480
+      ],
+      "name": "Exec system.status",
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "{{$env.SERVICE_BASE_URL}}/v1/storage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.OMEAB_HEALTH_TOKEN }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1872,
+        -384
+      ],
+      "name": "Exec storage.status",
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "{{$env.SERVICE_BASE_URL}}/v1/backups",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.OMEAB_HEALTH_TOKEN }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1872,
+        -304
+      ],
+      "name": "Exec backup.status",
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "{{$env.SERVICE_BASE_URL}}/v1/docker",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.OMEAB_HEALTH_TOKEN }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1872,
+        -208
+      ],
+      "name": "Exec docker.status",
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "{{$env.SERVICE_BASE_URL}}/v1/disk-capacity",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.OMEAB_HEALTH_TOKEN }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1872,
+        -128
+      ],
+      "name": "Exec disk.status",
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "{{$env.OMEAB_SERVICE_URL}}/stats",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1872,
+        -32
+      ],
+      "name": "Exec rag.stats",
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "http://audiobook-factory:8080/stats",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.AUDIOBOOK_FACTORY_TOKEN }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1872,
+        64
+      ],
+      "name": "Exec audiobook.stats",
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "{{$env.OMEAB_SERVICE_URL}}/stats",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.MEDIA_AUTOMATION_TOKEN }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1872,
+        256
+      ],
+      "name": "Exec media.stats",
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT overall_status, asset_count, backlog_total, ml_status, storage_accessible, problems, timestamp FROM immich_monitor_state ORDER BY timestamp DESC LIMIT 1;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1872,
+        400
+      ],
+      "name": "Exec immich.status",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "{{CREDENTIAL_ID}}",
+          "name": "Postgres account"
+        }
+      },
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { error: { message: 'unknown_action_executor' }, statusCode: 403 } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1872,
+        560
+      ],
+      "name": "Exec Fallback"
+    },
+    {
+      "parameters": {
+        "jsCode": "const startedMs = Number($('Auth Validate Policy').first().json.started_ms || Date.now());\nconst ctx = $('Auth Validate Policy').first().json;\nconst action = ctx.registry_action;\nconst requestId = ctx.request_id;\nconst executorItem = $input.first().json || {};\n\nfunction fail(errorCode, message, partialData = {}) {\n  const finished = new Date().toISOString();\n  const response = {\n    request_id: requestId,\n    action,\n    status: 'failed',\n    executed: false,\n    requires_confirmation: false,\n    message,\n    data: partialData,\n    error_code: errorCode,\n    started_at: new Date(startedMs).toISOString(),\n    finished_at: finished,\n  };\n  return [{\n    json: {\n      http_status: errorCode === 'EXECUTOR_TIMEOUT' ? 504 : 502,\n      security_event: false,\n      audit: {\n        request_id: requestId,\n        requested_at: ctx.requested_at,\n        requested_by: ctx.requested_by,\n        action,\n        risk: ctx.risk || 'READ',\n        parameters: {},\n        status: 'failed',\n        executed: false,\n        requires_confirmation: false,\n        result_summary: { error_code: errorCode, ...(partialData.partial ? { partial: true } : {}) },\n        error_code: errorCode,\n        duration_ms: Date.now() - startedMs,\n        received_at: ctx.received_at,\n      },\n      response,\n    },\n  }];\n}\n\n// Detect HTTP/node errors\nif (executorItem.error || executorItem.statusCode >= 400) {\n  const msg = String(executorItem.error?.message || executorItem.message || 'Executor falhou');\n  if (/timeout/i.test(msg)) return fail('EXECUTOR_TIMEOUT', 'Timeout do executor.');\n  return fail('EXECUTOR_FAILED', 'Falha ao consultar serviço especializado.', { partial: true });\n}\n\nlet data = {};\nlet partial = false;\n\ntry {\n  if (action === 'system.status') {\n    const cpu = executorItem.cpu || {};\n    const memory = executorItem.memory || {};\n    data = {\n      cpu: {\n        usage_percent: cpu.usage_percent ?? null,\n        load_1m: cpu.load_1m ?? null,\n        load_5m: cpu.load_5m ?? null,\n        load_15m: cpu.load_15m ?? null,\n      },\n      memory: {\n        used_percent: memory.used_percent ?? null,\n        used_bytes: memory.used_bytes ?? null,\n        total_bytes: memory.total_bytes ?? null,\n        available_bytes: memory.available_bytes ?? null,\n      },\n      uptime_seconds: executorItem.uptime_seconds ?? null,\n      uptime_human: executorItem.uptime_human ?? null,\n    };\n  } else if (action === 'storage.status') {\n    data = {\n      healthy: !!executorItem.healthy,\n      mounted: !!executorItem.mounted,\n      rw: String(executorItem.mode || '') === 'rw',\n      identity_match: !!executorItem.identity_match,\n      read_test: !!executorItem.read_test,\n    };\n  } else if (action === 'backup.status') {\n    const pg = executorItem.postgres || {};\n    const entries = Object.values(pg);\n    const ok = entries.filter((e) => e && e.status === 'ok').length;\n    const failCount = entries.filter((e) => e && e.status && e.status !== 'ok').length;\n    const restic = executorItem.restic || {};\n    const offsite = executorItem.offsite || {};\n    data = {\n      healthy: !!executorItem.healthy,\n      checked_at: executorItem.checked_at ?? null,\n      postgres: { configured: entries.length, ok, failed: failCount },\n      restic: {\n        status: restic.status ?? null,\n        age_hours: restic.age_hours ?? null,\n        last_result: restic.last_result ?? null,\n        snapshot_count: restic.snapshot_count ?? null,\n      },\n      offsite: {\n        status: offsite.status ?? null,\n        age_hours: offsite.age_hours ?? null,\n      },\n      issues_count: Array.isArray(executorItem.issues) ? executorItem.issues.length : 0,\n    };\n  } else if (action === 'docker.status') {\n    const containers = Array.isArray(executorItem.containers) ? executorItem.containers : [];\n    data = {\n      healthy: !!executorItem.healthy,\n      summary: {\n        total: executorItem.summary?.total ?? containers.length,\n        running: executorItem.summary?.running ?? null,\n        stopped: executorItem.summary?.stopped ?? null,\n        unhealthy: executorItem.summary?.unhealthy ?? null,\n      },\n      containers: containers.map((c) => ({\n        name: c.name ?? null,\n        state: c.state ?? null,\n        health: c.health ?? null,\n      })),\n    };\n  } else if (action === 'disk.status') {\n    const filesystems = Array.isArray(executorItem.filesystems) ? executorItem.filesystems : [];\n    data = {\n      status: executorItem.status ?? null,\n      summary: executorItem.summary || {},\n      mounts: filesystems.map((f) => ({\n        mount: f.mount ?? null,\n        used_percent: f.used_percent ?? null,\n        capacity_state: f.capacity_state ?? null,\n        available: f.available ?? null,\n        total_gb: f.total_gb ?? null,\n        free_gb: f.free_gb ?? null,\n      })),\n    };\n  } else if (action === 'immich.status') {\n    // From immich_monitor_state row\n    if (!executorItem.overall_status && executorItem.overall_status !== 'healthy') {\n      // empty row\n      if (executorItem.overall_status == null && Object.keys(executorItem).length === 0) {\n        partial = true;\n        data = { overall: 'unknown', assets_count: null, jobs: {}, ml: null, problems: [], partial: true };\n      } else {\n        let problems = executorItem.problems || [];\n        if (typeof problems === 'string') {\n          try { problems = JSON.parse(problems); } catch (e) { problems = []; }\n        }\n        data = {\n          overall: executorItem.overall_status ?? 'unknown',\n          assets_count: executorItem.asset_count ?? null,\n          jobs: {\n            backlog_total: executorItem.backlog_total ?? null,\n          },\n          ml: executorItem.ml_status ?? null,\n          storage_accessible: executorItem.storage_accessible ?? null,\n          problems: (problems || []).map((p) => ({\n            code: p.code ?? p.event ?? null,\n            severity: p.severity ?? null,\n          })),\n          checked_at: executorItem.timestamp ?? executorItem.checked_at ?? null,\n        };\n      }\n    } else {\n      let problems = executorItem.problems || [];\n      if (typeof problems === 'string') {\n        try { problems = JSON.parse(problems); } catch (e) { problems = []; }\n      }\n      data = {\n        overall: executorItem.overall_status ?? 'unknown',\n        assets_count: executorItem.asset_count ?? null,\n        jobs: {\n          backlog_total: executorItem.backlog_total ?? null,\n        },\n        ml: executorItem.ml_status ?? null,\n        storage_accessible: executorItem.storage_accessible ?? null,\n        problems: (problems || []).map((p) => ({\n          code: p.code ?? p.event ?? null,\n          severity: p.severity ?? null,\n        })),\n        checked_at: executorItem.timestamp ?? null,\n      };\n    }\n  } else if (action === 'rag.stats') {\n    data = {\n      documents: executorItem.documents ?? null,\n      chunks: executorItem.chunks ?? null,\n      model: executorItem.embedding_model ?? null,\n      dimension: executorItem.vector_dimension ?? null,\n    };\n  } else if (action === 'audiobook.stats') {\n    const by = executorItem.by_status || {};\n    data = {\n      jobs: executorItem.total_jobs ?? null,\n      completed: by.completed ?? 0,\n      processing: (by.processing ?? 0) + (by.received ?? 0) + (executorItem.worker_busy ? 1 : 0),\n      failed: by.failed ?? 0,\n    };\n  } else if (action === 'media.stats') {\n    data = {\n      total_items: executorItem.total_items ?? null,\n      by_status: executorItem.by_status || {},\n      worker_busy: !!executorItem.worker_busy,\n    };\n  } else {\n    return fail('ACTION_NOT_ALLOWED', 'Executor sem sanitizer.');\n  }\n} catch (e) {\n  return fail('EXECUTOR_FAILED', 'Falha ao sanitizar resultado.', { partial: true });\n}\n\nif (partial) data.partial = true;\n\nconst finished = new Date().toISOString();\nconst response = {\n  request_id: requestId,\n  action,\n  status: 'success',\n  executed: true,\n  requires_confirmation: false,\n  message: 'ok',\n  data,\n  started_at: new Date(startedMs).toISOString(),\n  finished_at: finished,\n};\n\nreturn [{\n  json: {\n    http_status: 200,\n    security_event: false,\n    audit: {\n      request_id: requestId,\n      requested_at: ctx.requested_at,\n      requested_by: ctx.requested_by,\n      action,\n      risk: ctx.risk || 'READ',\n      parameters: {},\n      status: 'success',\n      executed: true,\n      requires_confirmation: false,\n      result_summary: {\n        keys: Object.keys(data),\n        partial: !!data.partial,\n      },\n      error_code: null,\n      duration_ms: Date.now() - startedMs,\n      received_at: ctx.received_at,\n    },\n    response,\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2144,
+        -128
+      ],
+      "name": "Sanitize Result"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "{{\n(() => {\n  const a = $json.audit || {};\n  const rid = String(a.request_id || '').replace(/'/g, \"''\");\n  const status = String(a.status || 'success').replace(/'/g, \"''\");\n  const summary = JSON.stringify(a.result_summary || {}).replace(/'/g, \"''\");\n  const err = a.error_code ? String(a.error_code).replace(/'/g, \"''\") : null;\n  const duration = Number.isFinite(Number(a.duration_ms)) ? Number(a.duration_ms) : 'NULL';\n  const executed = a.executed ? 'true' : 'false';\n  return `\nUPDATE hestia_action_audit SET\n  status = '${status}',\n  executed = ${executed},\n  result_summary = '${summary}'::jsonb,\n  error_code = ${err ? `'${err}'` : 'NULL'},\n  duration_ms = ${duration}\nWHERE request_id = '${rid}'::uuid;\n`;\n})()\n}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2368,
+        -128
+      ],
+      "name": "Audit Update",
+      "credentials": {
+        "postgres": {
+          "id": "{{CREDENTIAL_ID}}",
+          "name": "Postgres account"
+        }
+      },
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($('Sanitize Result').first().json.response) }}",
+        "options": {
+          "responseCode": "={{ Number($('Sanitize Result').first().json.http_status || 200) }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2592,
+        -128
+      ],
+      "name": "Respond Success"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($('Prepare Replay Security').first().json.response) }}",
+        "options": {
+          "responseCode": "={{ Number($('Prepare Replay Security').first().json.http_status || 409) }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1552,
+        -16
+      ],
+      "name": "Respond Replay"
+    },
+    {
+      "parameters": {
+        "jsCode": "const auth = $('Auth Validate Policy').first().json;\nconst name = auth.security_event_name || 'security_event';\nlet recent = 0;\ntry {\n  const rows = $('Security Dedup Check').all().map((i) => i.json);\n  recent = Number((rows.find((r) => r.recent_security != null) || rows[0] || {}).recent_security || 0);\n} catch (e) { recent = 0; }\nconst should = !!auth.security_event && recent < 3;\nreturn [{\n  json: {\n    should_emit_security: should,\n    response: auth.response,\n    http_status: auth.http_status || 401,\n    event: {\n      source: 'hestia_action_router',\n      severity: 'warning',\n      component: 'security',\n      event: name,\n      status: 'rejected',\n      timestamp: new Date().toISOString(),\n      message: `Action Router security: ${name}`,\n      details: {\n        error_code: auth.response?.error_code || name.toUpperCase(),\n        action: auth.response?.action || null,\n      },\n      requires_attention: true,\n      suggested_action: 'Revisar tentativas no hestia_action_audit.',\n      correlation_id: `hestia-action-security:${name}`,\n    },\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1152,
+        432
+      ],
+      "name": "Prepare Security Event"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "3f0dd6f6-3116-5eb6-b1d3-95f9d913cee8",
+              "leftValue": "={{ $json.should_emit_security }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1360,
+        432
+      ],
+      "name": "Should Emit Security?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "{{$env.N8N_WEBHOOK_BASE}}/webhook/hestia-event",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.event }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1584,
+        352
+      ],
+      "name": "Emit Security Event",
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT COUNT(*)::int AS recent_security FROM hestia_events WHERE source = 'hestia_action_router' AND component = 'security' AND event = 'replay_detected' AND received_at > NOW() - INTERVAL '5 minutes';",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1552,
+        144
+      ],
+      "name": "Replay Security Dedup",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "{{CREDENTIAL_ID}}",
+          "name": "Postgres account"
+        }
+      },
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Replay Gate').first().json;\nlet recent = 0;\ntry {\n  const rows = $('Replay Security Dedup').all().map((i) => i.json);\n  recent = Number((rows.find((r) => r.recent_security != null) || {}).recent_security || 0);\n} catch (e) { recent = 0; }\nconst should = !!ctx.security_event && recent < 3;\nconst response = ctx.response;\nif (!response) {\n  throw new Error('Replay response missing');\n}\nreturn [{\n  json: {\n    should_emit_security: should,\n    response,\n    http_status: ctx.http_status || 409,\n    event: {\n      source: 'hestia_action_router',\n      severity: 'warning',\n      component: 'security',\n      event: 'replay_detected',\n      status: 'rejected',\n      timestamp: new Date().toISOString(),\n      message: 'Action Router security: replay_detected',\n      details: { error_code: 'REPLAY_DETECTED', action: response.action || null },\n      requires_attention: true,\n      suggested_action: 'Investigar reenvio de request_id.',\n      correlation_id: 'hestia-action-security:replay_detected',\n    },\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1696,
+        160
+      ],
+      "name": "Prepare Replay Security"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "17c38646-f2fb-5661-843a-01371717f53d",
+              "leftValue": "={{ $json.should_emit_security }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2032,
+        160
+      ],
+      "name": "Emit Replay Security?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "{{$env.N8N_WEBHOOK_BASE}}/webhook/hestia-event",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.event }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2240,
+        80
+      ],
+      "name": "Emit Replay Security Event",
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Rate Limit Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rate Limit Check": {
+      "main": [
+        [
+          {
+            "node": "Auth Validate Policy",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auth Validate Policy": {
+      "main": [
+        [
+          {
+            "node": "Should Execute?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Execute?": {
+      "main": [
+        [
+          {
+            "node": "Reserve Request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Audit Reject",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reserve Request": {
+      "main": [
+        [
+          {
+            "node": "Replay Gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Replay Gate": {
+      "main": [
+        [
+          {
+            "node": "Not Replay?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Not Replay?": {
+      "main": [
+        [
+          {
+            "node": "Resolve Action",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Replay Security Dedup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolve Action": {
+      "main": [
+        [
+          {
+            "node": "Exec system.status",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Exec storage.status",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Exec backup.status",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Exec docker.status",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Exec disk.status",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Exec immich.status",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Exec rag.stats",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Exec audiobook.stats",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Exec media.stats",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Exec Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Exec system.status": {
+      "main": [
+        [
+          {
+            "node": "Sanitize Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Exec storage.status": {
+      "main": [
+        [
+          {
+            "node": "Sanitize Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Exec backup.status": {
+      "main": [
+        [
+          {
+            "node": "Sanitize Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Exec docker.status": {
+      "main": [
+        [
+          {
+            "node": "Sanitize Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Exec disk.status": {
+      "main": [
+        [
+          {
+            "node": "Sanitize Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Exec immich.status": {
+      "main": [
+        [
+          {
+            "node": "Sanitize Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Exec rag.stats": {
+      "main": [
+        [
+          {
+            "node": "Sanitize Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Exec audiobook.stats": {
+      "main": [
+        [
+          {
+            "node": "Sanitize Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Exec media.stats": {
+      "main": [
+        [
+          {
+            "node": "Sanitize Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Exec Fallback": {
+      "main": [
+        [
+          {
+            "node": "Sanitize Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sanitize Result": {
+      "main": [
+        [
+          {
+            "node": "Audit Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Audit Update": {
+      "main": [
+        [
+          {
+            "node": "Respond Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Audit Reject": {
+      "main": [
+        [
+          {
+            "node": "Security Dedup Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Security Dedup Check": {
+      "main": [
+        [
+          {
+            "node": "Prepare Security Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Security Event": {
+      "main": [
+        [
+          {
+            "node": "Should Emit Security?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Emit Security?": {
+      "main": [
+        [
+          {
+            "node": "Emit Security Event",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Reject",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Emit Security Event": {
+      "main": [
+        [
+          {
+            "node": "Respond Reject",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Replay Security Dedup": {
+      "main": [
+        [
+          {
+            "node": "Prepare Replay Security",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Replay Security": {
+      "main": [
+        [
+          {
+            "node": "Emit Replay Security?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Emit Replay Security?": {
+      "main": [
+        [
+          {
+            "node": "Emit Replay Security Event",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Replay",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Emit Replay Security Event": {
+      "main": [
+        [
+          {
+            "node": "Respond Replay",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "binaryMode": "separate"
+  },
+  "meta": {
+    "templateSource": "VinyLab-Automation-Hub",
+    "sanitized": true
+  },
+  "pinData": {},
+  "active": false
+}
